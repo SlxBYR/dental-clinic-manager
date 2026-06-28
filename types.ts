@@ -54,3 +54,16 @@ export interface ClinicData {
   appointments: Record<string, GlobalAppointment[]>;
   catalog: TreatmentCategory[];
 }
+
+export interface BackupSettings {
+  endpoint: string;
+  token?: string;
+}
+
+export interface BackupPayload {
+  app: 'DentalClinicManager';
+  generatedAt: string;
+  clinicName: string;
+  version?: number;
+  data: ClinicData;
+}

@@ -38,5 +38,6 @@ export const DEFAULT_CATALOG: TreatmentCategory[] = [
 ];
 
 export const STORAGE_KEY = 'dental_clinic_data_v2';
+export const BACKUP_SETTINGS_KEY = 'dental_clinic_backup_settings_v1';
 export const DATA_VERSION = 3;
 export const APP_VERSION = '0.0.2';

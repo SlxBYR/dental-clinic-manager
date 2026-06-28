@@ -1045,6 +1045,9 @@ const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClose: () 
   const [tab, setTab] = useState<'data' | 'catalog'>('data');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [clinicNameForm, setClinicNameForm] = useState(currentClinicName);
+  const [backupSettings, setBackupSettings] = useState(clinicService.getBackupSettings());
+  const [backupStatus, setBackupStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
+  const [isSendingBackup, setIsSendingBackup] = useState(false);
   
   // Catalog State
   const [catalog, setCatalog] = useState<TreatmentCategory[]>(clinicService.getCatalog());
@@ -1062,6 +1065,20 @@ const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClose: () 
     clinicService.updateClinicName(clinicNameForm.trim());
     alert('诊所名称已更新');
     onRefresh();
+  };
+
+  const handleSaveBackupSettings = () => {
+    clinicService.updateBackupSettings(backupSettings);
+    setBackupStatus({ type: 'success', message: '备份接口配置已保存。' });
+  };
+
+  const handleSendBackup = async () => {
+    setIsSendingBackup(true);
+    setBackupStatus(null);
+    clinicService.updateBackupSettings(backupSettings);
+    const result = await clinicService.sendBackupToServer(backupSettings);
+    setBackupStatus({ type: result.success ? 'success' : 'error', message: result.message });
+    setIsSendingBackup(false);
   };
 
   const handleExport = () => {
@@ -1200,6 +1217,57 @@ const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClose: () 
             </h4>
             <p className="text-base text-slate-500 mb-6">将所有患者、预约和设置数据导出为JSON文件备份。</p>
             <Button onClick={handleExport} size="lg">导出 JSON</Button>
+          </div>
+
+          <div className="bg-slate-50 p-8 rounded-xl border border-slate-200">
+            <h4 className="font-bold text-slate-800 mb-2 flex items-center gap-2 text-lg">
+              <Upload size={24} className="text-teal-600" /> 服务器备份
+            </h4>
+            <p className="text-base text-slate-500 mb-6">
+              向自建接口发送完整备份。请求方式为 POST，JSON body 包含 generatedAt、clinicName、version 和 data；Token 会通过 Authorization: Bearer 发送。
+            </p>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-slate-600 mb-2 font-medium">备份接口地址</label>
+                <input
+                  className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none focus:ring-2 focus:ring-teal-500"
+                  placeholder="https://your-domain.example.com/backup"
+                  value={backupSettings.endpoint}
+                  onChange={e => {
+                    setBackupSettings({ ...backupSettings, endpoint: e.target.value });
+                    setBackupStatus(null);
+                  }}
+                />
+              </div>
+              <div>
+                <label className="block text-slate-600 mb-2 font-medium">访问 Token（可选）</label>
+                <input
+                  type="password"
+                  className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none focus:ring-2 focus:ring-teal-500"
+                  placeholder="服务器校验用 Token"
+                  value={backupSettings.token || ''}
+                  onChange={e => {
+                    setBackupSettings({ ...backupSettings, token: e.target.value });
+                    setBackupStatus(null);
+                  }}
+                />
+              </div>
+              {backupStatus && (
+                <div className={`rounded-lg border px-4 py-3 text-base ${
+                  backupStatus.type === 'success'
+                    ? 'border-teal-200 bg-teal-50 text-teal-800'
+                    : 'border-red-200 bg-red-50 text-red-700'
+                }`}>
+                  {backupStatus.message}
+                </div>
+              )}
+              <div className="flex flex-wrap gap-3">
+                <Button onClick={handleSaveBackupSettings} variant="secondary" size="lg">保存接口配置</Button>
+                <Button onClick={handleSendBackup} size="lg" disabled={isSendingBackup}>
+                  {isSendingBackup ? '发送中...' : '立即发送备份'}
+                </Button>
+              </div>
+            </div>
           </div>
 
           <div className="bg-slate-50 p-8 rounded-xl border border-slate-200">

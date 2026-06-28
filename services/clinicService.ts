@@ -1,5 +1,5 @@
-import { ClinicData, Patient, GlobalAppointment, TreatmentRecord, TreatmentCategory, TreatmentItem, AppointmentStatus } from '../types';
-import { STORAGE_KEY, DEFAULT_CATALOG, DATA_VERSION } from '../constants';
+import { ClinicData, Patient, GlobalAppointment, TreatmentCategory, TreatmentItem, AppointmentStatus, BackupSettings, BackupPayload } from '../types';
+import { STORAGE_KEY, BACKUP_SETTINGS_KEY, DEFAULT_CATALOG, DATA_VERSION } from '../constants';
 
 const normalizeName = (name: string) => name.trim().replace(/\s+/g, ' ').toLowerCase();
 const normalizePhone = (phone: string) => phone.trim().replace(/\s/g, '');
@@ -150,6 +150,84 @@ class ClinicService {
 
   exportData(): string {
     return JSON.stringify(this.data, null, 2);
+  }
+
+  createBackupPayload(): BackupPayload {
+    return {
+      app: 'DentalClinicManager',
+      generatedAt: new Date().toISOString(),
+      clinicName: this.getClinicName(),
+      version: this.data.version,
+      data: this.data
+    };
+  }
+
+  getBackupSettings(): BackupSettings {
+    const stored = localStorage.getItem(BACKUP_SETTINGS_KEY);
+    if (!stored) return { endpoint: '', token: '' };
+    try {
+      const parsed = JSON.parse(stored);
+      return {
+        endpoint: typeof parsed.endpoint === 'string' ? parsed.endpoint : '',
+        token: typeof parsed.token === 'string' ? parsed.token : ''
+      };
+    } catch (e) {
+      console.error('Failed to parse backup settings', e);
+      return { endpoint: '', token: '' };
+    }
+  }
+
+  updateBackupSettings(settings: BackupSettings) {
+    localStorage.setItem(BACKUP_SETTINGS_KEY, JSON.stringify({
+      endpoint: settings.endpoint.trim(),
+      token: settings.token?.trim() || ''
+    }));
+  }
+
+  async sendBackupToServer(settings: BackupSettings): Promise<{ success: boolean; message: string }> {
+    const endpoint = settings.endpoint.trim();
+    if (!endpoint) {
+      return { success: false, message: '请先填写备份服务器接口地址。' };
+    }
+
+    let url: URL;
+    try {
+      url = new URL(endpoint);
+      if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Invalid protocol');
+    } catch {
+      return { success: false, message: '接口地址格式不正确，应以 http:// 或 https:// 开头。' };
+    }
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 15000);
+
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json'
+      };
+      const token = settings.token?.trim();
+      if (token) headers.Authorization = `Bearer ${token}`;
+
+      const response = await fetch(url.toString(), {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(this.createBackupPayload()),
+        signal: controller.signal
+      });
+
+      if (!response.ok) {
+        return { success: false, message: `服务器返回 ${response.status} ${response.statusText || ''}`.trim() };
+      }
+
+      return { success: true, message: '备份已发送到服务器。' };
+    } catch (e) {
+      const message = e instanceof DOMException && e.name === 'AbortError'
+        ? '发送超时，请检查服务器地址或网络。'
+        : '发送失败，请检查接口地址、CORS 和网络连接。';
+      return { success: false, message };
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
   }
 
   importData(jsonString: string): boolean {
