@@ -1,7 +1,4 @@
 from pathlib import Path
-import struct
-import subprocess
-
 from PIL import Image
 
 
@@ -9,10 +6,6 @@ BUILD = Path("build")
 SOURCE = BUILD / "icon-preview.png"
 ICONSET = BUILD / "icon.iconset"
 ICO_PNGS = BUILD / "ico-pngs"
-
-
-def run(cmd: list[str]) -> None:
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
 
 
 def make_icon() -> None:
@@ -39,26 +32,23 @@ def make_icns() -> None:
         ("icon_512x512.png", 512),
         ("icon_512x512@2x.png", 1024),
     ]
+    icon = Image.open(BUILD / "icon.png").convert("RGBA")
     for name, px in sizes:
-        run(["sips", "-z", str(px), str(px), str(BUILD / "icon.png"), "--out", str(ICONSET / name)])
-    run(["iconutil", "-c", "icns", str(ICONSET), "-o", str(BUILD / "icon.icns")])
+        icon.resize((px, px), Image.Resampling.LANCZOS).save(ICONSET / name)
+    icon.save(
+        BUILD / "icon.icns",
+        format="ICNS",
+        sizes=[(16, 16), (32, 32), (64, 64), (128, 128), (256, 256), (512, 512), (1024, 1024)],
+    )
 
 
 def make_ico() -> None:
     sizes = [16, 32, 48, 64, 128, 256]
-    images: list[tuple[int, bytes]] = []
+    icon = Image.open(BUILD / "icon.png").convert("RGBA")
     for px in sizes:
         out = ICO_PNGS / f"{px}.png"
-        run(["sips", "-z", str(px), str(px), str(BUILD / "icon.png"), "--out", str(out)])
-        images.append((px, out.read_bytes()))
-
-    header = struct.pack("<HHH", 0, 1, len(images))
-    entries = []
-    offset = 6 + len(images) * 16
-    for px, data in images:
-        entries.append(struct.pack("<BBBBHHII", 0 if px == 256 else px, 0 if px == 256 else px, 0, 0, 1, 32, len(data), offset))
-        offset += len(data)
-    (BUILD / "icon.ico").write_bytes(header + b"".join(entries) + b"".join(data for _, data in images))
+        icon.resize((px, px), Image.Resampling.LANCZOS).save(out)
+    icon.save(BUILD / "icon.ico", format="ICO", sizes=[(px, px) for px in sizes])
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { 
+import {
   Users, 
   Calendar, 
   LayoutDashboard, 
@@ -32,19 +32,66 @@ import { APP_VERSION } from './constants';
 // --- Types for App State ---
 type View = 'dashboard' | 'patients' | 'schedule';
 
-const sendWindowControl = (action: 'close' | 'minimize' | 'maximize') => {
-  const electronRequire = (window as any).require;
-  if (!electronRequire) return;
-  electronRequire('electron').ipcRenderer.send('window-control', action);
+const formatDateKey = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 };
 
-const WindowControls = () => (
-  <div className="absolute left-4 top-4 z-30 flex gap-2 [-webkit-app-region:no-drag]">
-    <button aria-label="关闭窗口" onClick={() => sendWindowControl('close')} className="h-3 w-3 rounded-full bg-red-500 hover:bg-red-600 border border-red-600/40" />
-    <button aria-label="最小化窗口" onClick={() => sendWindowControl('minimize')} className="h-3 w-3 rounded-full bg-yellow-400 hover:bg-yellow-500 border border-yellow-500/40" />
-    <button aria-label="最大化窗口" onClick={() => sendWindowControl('maximize')} className="h-3 w-3 rounded-full bg-green-500 hover:bg-green-600 border border-green-600/40" />
-  </div>
-);
+const addDays = (date: Date, days: number) => {
+  const next = new Date(date);
+  next.setDate(date.getDate() + days);
+  return next;
+};
+
+const getTreatmentCountByDate = (patients: Patient[]) => {
+  const counts = new Map<string, number>();
+  patients.forEach(patient => {
+    patient.treatments.forEach(treatment => {
+      counts.set(treatment.date, (counts.get(treatment.date) || 0) + 1);
+    });
+  });
+  return counts;
+};
+
+const buildTreatmentContributionDays = (patients: Patient[], weekCount = 26) => {
+  const counts = getTreatmentCountByDate(patients);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const end = new Date(today);
+  end.setDate(today.getDate() + (6 - today.getDay()));
+
+  const start = new Date(end);
+  start.setDate(end.getDate() - weekCount * 7 + 1);
+
+  const days = Array.from({ length: weekCount * 7 }, (_, index) => {
+    const date = new Date(start);
+    date.setDate(start.getDate() + index);
+    const dateKey = formatDateKey(date);
+    return {
+      date: dateKey,
+      count: counts.get(dateKey) || 0,
+      isFuture: date > today,
+    };
+  });
+
+  return {
+    days,
+    total: days.reduce((sum, day) => sum + day.count, 0),
+    max: days.reduce((max, day) => Math.max(max, day.count), 0),
+  };
+};
+
+const getContributionColor = (count: number, isFuture: boolean) => {
+  if (isFuture) return 'bg-slate-50 border-slate-100';
+  if (count >= 5) return 'bg-teal-800 border-teal-800';
+  if (count >= 3) return 'bg-teal-600 border-teal-600';
+  if (count >= 2) return 'bg-teal-400 border-teal-400';
+  if (count >= 1) return 'bg-teal-200 border-teal-200';
+  return 'bg-slate-100 border-slate-200';
+};
 
 export default function App() {
   const [currentView, setCurrentView] = useState<View>('dashboard');
@@ -94,49 +141,49 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-slate-50 overflow-hidden font-sans text-slate-900 relative">
-      <WindowControls />
-      {/* Sidebar */}
-      <aside className="w-64 bg-slate-900 text-slate-300 flex flex-col shadow-xl flex-shrink-0 relative [-webkit-app-region:drag]">
-        <div className="px-6 pt-16 pb-6 border-b border-slate-800">
-          <div className="flex items-center gap-3 text-teal-400 [-webkit-app-region:no-drag]">
-            <Smile className="w-8 h-8" />
-            <span className="font-bold text-xl tracking-tight text-white break-all">{clinicName}</span>
+      <aside className="w-64 bg-slate-900 text-slate-300 flex flex-col shadow-xl flex-shrink-0 relative">
+        <div className="p-4 border-b border-slate-800">
+          <div className="flex items-center gap-3 min-w-0">
+            <img src="/app-icon.png" alt="" className="h-11 w-11 rounded-xl bg-white object-cover shadow-sm flex-shrink-0" />
+            <div className="min-w-0 flex-1">
+              <div className="font-bold text-lg leading-tight text-white truncate">{clinicName}</div>
+              <div className="mt-1 flex items-center justify-between gap-2">
+                <span className="text-xs text-slate-500 font-mono">v{APP_VERSION}</span>
+                <button
+                  onClick={() => setShowSettings(true)}
+                  className="text-slate-400 hover:text-white transition-colors p-1.5 rounded-md hover:bg-slate-800"
+                  aria-label="系统设置"
+                >
+                  <Settings size={17} />
+                </button>
+              </div>
+            </div>
           </div>
         </div>
         
-        <nav className="flex-1 p-4 space-y-2 [-webkit-app-region:no-drag]">
+        <nav className="flex-1 p-4 space-y-2">
           <SidebarItem 
             icon={<LayoutDashboard size={20} />} 
-            label="总览 Dashboard" 
+            label="总览" 
             active={currentView === 'dashboard' && !selectedPatientId} 
             onClick={() => { setSelectedPatientId(null); setCurrentView('dashboard'); }} 
           />
           <SidebarItem 
             icon={<Users size={20} />} 
-            label="患者管理 Patients" 
+            label="患者管理" 
             active={currentView === 'patients'} 
             onClick={() => { setSelectedPatientId(null); setCurrentView('patients'); }} 
           />
           <SidebarItem 
             icon={<Calendar size={20} />} 
-            label="日程预约 Schedule" 
+            label="日程预约" 
             active={currentView === 'schedule'} 
             onClick={() => { setSelectedPatientId(null); setCurrentView('schedule'); }} 
           />
         </nav>
-
-        <div className="px-4 pt-4 pb-7 border-t border-slate-800 flex justify-between items-center [-webkit-app-region:no-drag]">
-           <div className="text-xs text-slate-500 font-mono">
-            <p>Version {APP_VERSION}</p>
-          </div>
-          <button onClick={() => setShowSettings(true)} className="text-slate-400 hover:text-white transition-colors p-2 rounded-lg hover:bg-slate-800">
-            <Settings size={20} />
-          </button>
-        </div>
       </aside>
 
-      {/* Main Content */}
-      <main className="flex-1 overflow-auto flex flex-col [-webkit-app-region:no-drag]">
+      <main className="flex-1 overflow-auto flex flex-col">
         {renderContent()}
       </main>
 
@@ -161,8 +208,9 @@ const SidebarItem = ({ icon, label, active, onClick }: { icon: React.ReactNode, 
 
 // 1. Dashboard View
 const Dashboard = ({ patients, onViewChange, onPatientClick, onRefresh }: { patients: Patient[], onViewChange: (v: View) => void, onPatientClick: (id: string) => void, onRefresh: () => void }) => {
-  const today = new Date().toISOString().split('T')[0];
+  const today = formatDateKey(new Date());
   const todayAppts = clinicService.getAppointmentsByDate(today);
+  const contribution = useMemo(() => buildTreatmentContributionDays(patients), [patients]);
 
   const toggleStatus = (e: React.MouseEvent, appt: GlobalAppointment) => {
     e.stopPropagation();
@@ -174,7 +222,7 @@ const Dashboard = ({ patients, onViewChange, onPatientClick, onRefresh }: { pati
   return (
     <div className="p-8 max-w-7xl mx-auto w-full">
       <header className="mb-8">
-        <h1 className="text-3xl font-bold text-slate-900">诊所概况 Dashboard</h1>
+        <h1 className="text-3xl font-bold text-slate-900">诊所概况</h1>
         <p className="text-slate-500 mt-2 text-lg">欢迎回来，今天 {today} 的工作安排如下</p>
       </header>
 
@@ -207,6 +255,8 @@ const Dashboard = ({ patients, onViewChange, onPatientClick, onRefresh }: { pati
           </div>
         </div>
       </div>
+
+      <TreatmentContributionWall contribution={contribution} />
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-6">
         <h3 className="text-xl font-bold text-slate-800 mb-4">今日预约列表</h3>
@@ -250,6 +300,57 @@ const Dashboard = ({ patients, onViewChange, onPatientClick, onRefresh }: { pati
             </table>
           </div>
         )}
+      </div>
+    </div>
+  );
+};
+
+const TreatmentContributionWall = ({ contribution }: { contribution: ReturnType<typeof buildTreatmentContributionDays> }) => {
+  const weekdayLabels = ['日', '一', '二', '三', '四', '五', '六'];
+  const hasActivity = contribution.total > 0;
+
+  return (
+    <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-6 mb-8">
+      <div className="flex flex-wrap items-end justify-between gap-3 mb-5">
+        <div>
+          <h3 className="text-xl font-bold text-slate-800">处置完成记录</h3>
+          <p className="text-sm text-slate-500 mt-1">每个格子代表一天，处置完成越多颜色越深。</p>
+        </div>
+        <div className="text-right">
+          <div className="text-3xl font-bold text-slate-900">{contribution.total}</div>
+          <div className="text-sm text-slate-500">近 26 周完成处置</div>
+        </div>
+      </div>
+
+      <div className="flex gap-3 overflow-x-auto pb-2">
+        <div className="grid grid-rows-7 gap-1 pt-0.5 text-[11px] leading-3 text-slate-400 flex-shrink-0">
+          {weekdayLabels.map((label, index) => (
+            <div key={label} className="h-3 flex items-center justify-end">
+              {index % 2 === 1 ? label : ''}
+            </div>
+          ))}
+        </div>
+
+        <div className="grid grid-flow-col grid-rows-7 gap-1 min-w-max">
+          {contribution.days.map(day => (
+            <div
+              key={day.date}
+              title={`${day.date}: ${day.count} 个处置`}
+              className={`h-3 w-3 rounded-sm border ${getContributionColor(day.count, day.isFuture)}`}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500">
+        <span>{hasActivity ? `单日最高 ${contribution.max} 个处置` : '暂无处置记录'}</span>
+        <div className="flex items-center gap-2">
+          <span>少</span>
+          {[0, 1, 2, 3, 5].map(level => (
+            <span key={level} className={`h-3 w-3 rounded-sm border ${getContributionColor(level, false)}`} />
+          ))}
+          <span>多</span>
+        </div>
       </div>
     </div>
   );
@@ -629,8 +730,8 @@ const PatientDetail = ({ patient, onBack, onRefresh }: { patient: Patient, onBac
 // 4. Schedule Manager View
 const ScheduleManager = ({ patients, onRefresh, onPatientClick }: { patients: Patient[], onRefresh: () => void, onPatientClick: (id: string) => void }) => {
   const [mode, setMode] = useState<'daily' | 'range'>('daily');
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
-  const [endDate, setEndDate] = useState(new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0]);
+  const [date, setDate] = useState(formatDateKey(new Date()));
+  const [endDate, setEndDate] = useState(formatDateKey(addDays(new Date(), 7)));
 
   const appointments = useMemo(() => {
     if (mode === 'daily') {
@@ -1533,7 +1634,7 @@ const EditTreatmentModal = ({ phone, record, onClose, onSuccess }: { phone: stri
 };
 
 const AddAppointmentModal = ({ phone, defaultName, onClose, onSuccess }: { phone: string, defaultName: string, onClose: () => void, onSuccess: () => void }) => {
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [date, setDate] = useState(formatDateKey(new Date()));
   const [time, setTime] = useState('09:00');
 
   const handleSubmit = (e: React.FormEvent) => {

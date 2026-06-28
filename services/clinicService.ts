@@ -3,6 +3,12 @@ import { STORAGE_KEY, DEFAULT_CATALOG, DATA_VERSION } from '../constants';
 
 const normalizeName = (name: string) => name.trim().replace(/\s+/g, ' ').toLowerCase();
 const normalizePhone = (phone: string) => phone.trim().replace(/\s/g, '');
+const formatDateKey = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 
 const hashPatientId = (name: string, phone: string) => {
   const source = `${normalizeName(name)}|${normalizePhone(phone)}`;
@@ -256,7 +262,7 @@ class ClinicService {
 
     const record: TreatmentRecord = {
       id: new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14),
-      date: new Date().toISOString().split('T')[0],
+      date: formatDateKey(new Date()),
       item: item.name,
       price: price,
       teeth,
