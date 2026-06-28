@@ -300,9 +300,14 @@ class ClinicService {
 
   updatePatient(patientId: string, updates: Partial<Patient>) {
     if (!this.data.patients[patientId]) return;
+    const cleanUpdates = {
+      ...updates,
+      ...(updates.name !== undefined ? { name: updates.name.trim() } : {}),
+      ...(updates.phone !== undefined ? { phone: normalizePhone(updates.phone) } : {})
+    };
     this.data.patients[patientId] = {
       ...this.data.patients[patientId],
-      ...updates,
+      ...cleanUpdates,
       id: patientId
     };
     this.syncPatientSnapshots(patientId);
@@ -334,13 +339,15 @@ class ClinicService {
 
   // --- Treatments ---
 
-  addTreatment(patientId: string, item: TreatmentItem, price: number, teeth: string, note: string): boolean {
+  addTreatment(patientId: string, item: TreatmentItem, price: number, teeth: string, note: string, categoryId?: string): boolean {
     const patient = this.data.patients[patientId];
     if (!patient) return false;
 
     const record: TreatmentRecord = {
       id: new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14),
       date: formatDateKey(new Date()),
+      categoryId,
+      itemId: item.id,
       item: item.name,
       price: price,
       teeth,

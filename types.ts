@@ -13,6 +13,8 @@ export interface TreatmentCategory {
 export interface TreatmentRecord {
   id: string;
   date: string;
+  categoryId?: string;
+  itemId?: string;
   item: string; // Name of the item
   price: number; // Charged price
   teeth: string; // Selected teeth numbers or 'ALL', 'UPPER', etc.

@@ -466,7 +466,15 @@ const PatientList = ({ patients, onSelect, onRefresh }: { patients: Patient[], o
       </div>
 
       {showAddModal && (
-        <AddPatientModal onClose={() => setShowAddModal(false)} onSuccess={() => { setShowAddModal(false); onRefresh(); }} />
+        <AddPatientModal
+          patients={patients}
+          onSelectPatient={(patientId) => {
+            setShowAddModal(false);
+            onSelect(patientId);
+          }}
+          onClose={() => setShowAddModal(false)}
+          onSuccess={() => { setShowAddModal(false); onRefresh(); }}
+        />
       )}
     </div>
   );
@@ -478,7 +486,8 @@ const PatientDetail = ({ patient, onBack, onRefresh }: { patient: Patient, onBac
   const [showTreatmentModal, setShowTreatmentModal] = useState(false);
   const [showAppointmentModal, setShowAppointmentModal] = useState(false);
   const [editingInfo, setEditingInfo] = useState(false);
-  const [editForm, setEditForm] = useState({ name: patient.name, age: patient.age });
+  const [editForm, setEditForm] = useState({ name: patient.name, phone: patient.phone, gender: patient.gender, age: patient.age });
+  const [editError, setEditError] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   
   // State for editing treatment
@@ -486,10 +495,24 @@ const PatientDetail = ({ patient, onBack, onRefresh }: { patient: Patient, onBac
   const [deleteTreatmentId, setDeleteTreatmentId] = useState<string | null>(null);
 
   const handleSaveInfo = () => {
+    const cleanName = editForm.name.trim();
+    const cleanPhone = editForm.phone.trim();
+    if (!cleanName) {
+      setEditError('姓名是必填项');
+      return;
+    }
+    const existing = cleanPhone ? clinicService.findPatientByPhone(cleanPhone) : undefined;
+    if (existing && existing.id !== patient.id) {
+      setEditError(`该电话已属于患者 ${existing.name}`);
+      return;
+    }
     clinicService.updatePatient(patient.id, {
-      name: editForm.name.trim(),
+      name: cleanName,
+      phone: cleanPhone,
+      gender: editForm.gender,
       age: editForm.age.trim()
     });
+    setEditError('');
     setEditingInfo(false);
     onRefresh();
   };
@@ -573,11 +596,12 @@ const PatientDetail = ({ patient, onBack, onRefresh }: { patient: Patient, onBac
                  <Button variant="ghost" size="sm" onClick={() => setEditingInfo(true)}><Edit2 size={18} className="mr-1"/> 编辑</Button>
                ) : (
                  <div className="flex gap-2">
-                    <Button variant="ghost" size="sm" onClick={() => { setEditingInfo(false); setEditForm({ name: patient.name, age: patient.age }); }}>取消</Button>
+                    <Button variant="ghost" size="sm" onClick={() => { setEditingInfo(false); setEditError(''); setEditForm({ name: patient.name, phone: patient.phone, gender: patient.gender, age: patient.age }); }}>取消</Button>
                     <Button variant="primary" size="sm" onClick={handleSaveInfo}><Save size={18} className="mr-1"/> 保存</Button>
                  </div>
                )}
             </div>
+            {editError && <div className="mb-5 rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-base text-red-700">{editError}</div>}
             
             <div className="grid grid-cols-1 gap-6">
               <div className="grid grid-cols-3 items-center border-b border-slate-50 pb-4">
@@ -590,11 +614,22 @@ const PatientDetail = ({ patient, onBack, onRefresh }: { patient: Patient, onBac
               </div>
               <div className="grid grid-cols-3 items-center border-b border-slate-50 pb-4">
                 <span className="text-slate-500 font-medium">电话</span>
-                <div className="col-span-2 text-slate-900 font-mono">{patient.phone || '未填写'}</div>
+                <div className="col-span-2">
+                  {editingInfo ? (
+                    <input className="border border-slate-300 rounded px-3 py-2 w-full font-mono" value={editForm.phone} onChange={e => { setEditError(''); setEditForm({...editForm, phone: e.target.value.replace(/\s/g, '')}); }} />
+                  ) : <span className="text-slate-900 font-mono">{patient.phone || '未填写'}</span>}
+                </div>
               </div>
               <div className="grid grid-cols-3 items-center border-b border-slate-50 pb-4">
                 <span className="text-slate-500 font-medium">性别</span>
-                <div className="col-span-2 text-slate-900">{patient.gender}</div>
+                <div className="col-span-2">
+                  {editingInfo ? (
+                    <select className="border border-slate-300 rounded px-3 py-2 w-full bg-white" value={editForm.gender} onChange={e => setEditForm({...editForm, gender: e.target.value})}>
+                      <option value="男">男</option>
+                      <option value="女">女</option>
+                    </select>
+                  ) : <span className="text-slate-900">{patient.gender}</span>}
+                </div>
               </div>
               <div className="grid grid-cols-3 items-center border-b border-slate-50 pb-4">
                 <span className="text-slate-500 font-medium">年龄</span>
@@ -873,6 +908,47 @@ const TOOTH_POINTS: ToothPoint[] = [
   { id: 38, x: 454, y: 444, angle: -100, labelX: 496, labelY: 430, type: 'molar' }
 ];
 
+type ToothImagePoint = {
+  id: number;
+  left: number;
+  top: number;
+};
+
+const TOOTH_IMAGE_POINTS: ToothImagePoint[] = [
+  { id: 18, left: 3.3, top: 34.2 },
+  { id: 17, left: 9.3, top: 34.2 },
+  { id: 16, left: 15.3, top: 34.2 },
+  { id: 15, left: 21.3, top: 34.2 },
+  { id: 14, left: 27.3, top: 34.2 },
+  { id: 13, left: 33.3, top: 34.2 },
+  { id: 12, left: 39.4, top: 34.2 },
+  { id: 11, left: 45.4, top: 34.2 },
+  { id: 21, left: 51.9, top: 34.2 },
+  { id: 22, left: 58.0, top: 34.2 },
+  { id: 23, left: 64.0, top: 34.2 },
+  { id: 24, left: 70.0, top: 34.2 },
+  { id: 25, left: 76.0, top: 34.2 },
+  { id: 26, left: 82.0, top: 34.2 },
+  { id: 27, left: 88.0, top: 34.2 },
+  { id: 28, left: 94.1, top: 34.2 },
+  { id: 48, left: 3.3, top: 69.2 },
+  { id: 47, left: 9.3, top: 69.2 },
+  { id: 46, left: 15.3, top: 69.2 },
+  { id: 45, left: 21.3, top: 69.2 },
+  { id: 44, left: 27.3, top: 69.2 },
+  { id: 43, left: 33.3, top: 69.2 },
+  { id: 42, left: 39.4, top: 69.2 },
+  { id: 41, left: 45.4, top: 69.2 },
+  { id: 31, left: 51.9, top: 69.2 },
+  { id: 32, left: 58.0, top: 69.2 },
+  { id: 33, left: 64.0, top: 69.2 },
+  { id: 34, left: 70.0, top: 69.2 },
+  { id: 35, left: 76.0, top: 69.2 },
+  { id: 36, left: 82.0, top: 69.2 },
+  { id: 37, left: 88.0, top: 69.2 },
+  { id: 38, left: 94.1, top: 69.2 },
+];
+
 const ToothCrown = ({ tooth, selected }: { tooth: ToothPoint, selected: boolean }) => {
   const isMolar = tooth.type === 'molar';
   const isPremolar = tooth.type === 'premolar';
@@ -971,44 +1047,38 @@ const ToothSelector = ({ value, onChange }: { value: string, onChange: (val: str
         <button type="button" onClick={() => setSpecial('LOWER')} className={`px-3 py-1.5 text-sm font-bold rounded-lg border transition-all ${value==='LOWER' ? 'bg-teal-600 text-white shadow-lg' : 'bg-white hover:bg-slate-100 text-slate-600'}`}>下颌</button>
       </div>
 
-      <svg
-        viewBox="0 0 560 850"
-        className="w-full max-w-[360px] h-auto touch-none"
-        role="group"
-        aria-label="牙位选择图"
-      >
-        <rect x="0" y="0" width="560" height="850" rx="28" className="fill-slate-50" />
-        <line x1="280" y1="52" x2="280" y2="805" className="stroke-slate-300" strokeWidth="2" />
-        <line x1="58" y1="428" x2="502" y2="428" className="stroke-slate-300" strokeWidth="2" />
-        <text x="280" y="34" textAnchor="middle" className="fill-slate-700 text-5xl font-bold">上</text>
-        <text x="280" y="842" textAnchor="middle" className="fill-slate-700 text-5xl font-bold">下</text>
-        <text x="34" y="447" textAnchor="middle" className="fill-slate-700 text-5xl font-bold">右</text>
-        <text x="526" y="447" textAnchor="middle" className="fill-slate-700 text-5xl font-bold">左</text>
-
-        {TOOTH_POINTS.map(tooth => {
+      <div className="w-full overflow-x-auto">
+        <div className="relative mx-auto min-w-[760px] max-w-[920px] aspect-[1850/850] rounded-lg bg-white">
+          <img
+            src="./tooth-chart.png"
+            alt="牙位选择图"
+            className="absolute inset-0 h-full w-full rounded-lg object-contain"
+            draggable={false}
+          />
+          {TOOTH_IMAGE_POINTS.map(tooth => {
           const selected = selectedTeeth.has(tooth.id.toString()) || selectedTeeth.has('ALL') || (selectedTeeth.has('UPPER') && tooth.id < 30) || (selectedTeeth.has('LOWER') && tooth.id > 30);
           return (
-            <g
+            <button
               key={tooth.id}
-              className="group cursor-pointer"
+              type="button"
+              aria-label={`选择牙位 ${tooth.id}`}
+              title={`牙位 ${tooth.id}`}
+              style={{ left: `${tooth.left}%`, top: `${tooth.top}%` }}
+              className={`absolute h-9 w-9 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 text-sm font-bold transition-all ${
+                selected
+                  ? 'border-teal-700 bg-teal-500/80 text-white shadow-md'
+                  : 'border-transparent bg-white/0 text-transparent hover:border-teal-500 hover:bg-teal-100/70 hover:text-teal-900'
+              }`}
               onMouseDown={() => handleMouseDown(tooth.id)}
               onMouseEnter={() => handleMouseEnter(tooth.id)}
               onTouchStart={() => handleMouseDown(tooth.id)}
             >
-              <ToothCrown tooth={tooth} selected={selected} />
-              <text
-                x={tooth.labelX}
-                y={tooth.labelY}
-                textAnchor="middle"
-                dominantBaseline="middle"
-                className={`${selected ? 'fill-teal-700' : 'fill-slate-600 group-hover:fill-teal-700'} text-[18px] font-bold font-mono transition-colors`}
-              >
-                {tooth.id}
-              </text>
-            </g>
+              {selected ? tooth.id : ''}
+            </button>
           );
         })}
-      </svg>
+        </div>
+      </div>
       
       <div className="mt-3 text-center min-h-8 max-w-full">
         {value ? (
@@ -1381,9 +1451,26 @@ const ConfirmationModal = ({ title, message, onConfirm, onCancel }: { title: str
   </ModalBase>
 );
 
-const AddPatientModal = ({ onClose, onSuccess }: { onClose: () => void, onSuccess: () => void }) => {
+const AddPatientModal = ({ patients, onSelectPatient, onClose, onSuccess }: { patients: Patient[], onSelectPatient: (id: string) => void, onClose: () => void, onSuccess: () => void }) => {
   const [form, setForm] = useState({ name: '', phone: '', gender: '男', age: '' });
   const [error, setError] = useState('');
+  const nameQuery = form.name.trim().toLowerCase();
+
+  const similarPatients = useMemo(() => {
+    if (!nameQuery) return [];
+    return patients
+      .filter(patient => {
+        const name = patient.name.toLowerCase();
+        if (name.includes(nameQuery) || nameQuery.includes(name)) return true;
+        if (/^[a-zA-Z]+$/.test(nameQuery) && pinyin && typeof pinyin.convertToPinyin === 'function') {
+          const fullPinyin = pinyin.convertToPinyin(patient.name, ' ', true);
+          const initials = fullPinyin.split(' ').map((s: string) => s[0]).join('');
+          return fullPinyin.replace(/\s/g, '').includes(nameQuery) || initials.includes(nameQuery);
+        }
+        return false;
+      })
+      .slice(0, 5);
+  }, [patients, nameQuery]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1414,7 +1501,27 @@ const AddPatientModal = ({ onClose, onSuccess }: { onClose: () => void, onSucces
         <div>
           <label className="block text-base font-bold text-slate-700 mb-2">姓名</label>
           <input className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg focus:ring-2 focus:ring-teal-500 outline-none" 
-            value={form.name} onChange={e => setForm({...form, name: e.target.value})} autoFocus />
+            value={form.name} onChange={e => { setError(''); setForm({...form, name: e.target.value}); }} autoFocus />
+          {similarPatients.length > 0 && (
+            <div className="mt-3 rounded-lg border border-teal-100 bg-teal-50/60 overflow-hidden">
+              <div className="px-4 py-2 text-sm font-medium text-teal-800 border-b border-teal-100">
+                已有相似患者，点击可直接查看档案
+              </div>
+              <div className="divide-y divide-teal-100">
+                {similarPatients.map(patient => (
+                  <button
+                    key={patient.id}
+                    type="button"
+                    onClick={() => onSelectPatient(patient.id)}
+                    className="w-full px-4 py-3 text-left hover:bg-white transition-colors flex items-center justify-between gap-4"
+                  >
+                    <span className="font-bold text-slate-800">{patient.name}</span>
+                    <span className="text-sm font-mono text-slate-500">{patient.phone || '未填写电话'}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
         <div>
           <label className="block text-base font-bold text-slate-700 mb-2">电话 (可选)</label>
@@ -1487,7 +1594,7 @@ const AddTreatmentModal = ({ phone, onClose, onSuccess }: { phone: string, onClo
     const item = cat?.items.find(i => i.id === selectedItemId);
     
     if (item) {
-      clinicService.addTreatment(phone, item, price, teeth, note.trim());
+      clinicService.addTreatment(phone, item, price, teeth, note.trim(), selectedCatId);
       onSuccess();
     }
   };
@@ -1496,10 +1603,9 @@ const AddTreatmentModal = ({ phone, onClose, onSuccess }: { phone: string, onClo
 
   return (
     <ModalBase title="新增处置记录" onClose={onClose} size="2xl">
-      <form onSubmit={handleSubmit} className="grid grid-cols-1 xl:grid-cols-[minmax(320px,0.95fr)_minmax(360px,0.9fr)] gap-6 xl:gap-8 min-h-0 items-start">
-        {/* Left Side: Form */}
-        <div className="space-y-5 flex flex-col min-w-0">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
+      <form onSubmit={handleSubmit} className="space-y-6 min-h-0">
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(320px,1fr)_220px_minmax(260px,0.9fr)] gap-4 lg:gap-6 items-start">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
                <label className="block text-base font-bold text-slate-700 mb-2">分类</label>
                <select className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none bg-white h-[54px]"
@@ -1523,20 +1629,14 @@ const AddTreatmentModal = ({ phone, onClose, onSuccess }: { phone: string, onClo
             <p className="text-sm text-slate-400 mt-2">原价: ¥{currentCategory?.items.find(i => i.id === selectedItemId)?.price || 0}</p>
           </div>
 
-          <div className="flex-1">
+          <div>
             <label className="block text-base font-bold text-slate-700 mb-2">备注 (可选)</label>
-            <textarea className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none min-h-24 h-28 resize-none" 
+            <textarea className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none min-h-[54px] h-[54px] lg:h-[92px] resize-none"
               value={note} onChange={e => setNote(e.target.value)} />
-          </div>
-
-          <div className="pt-2 flex flex-wrap justify-end gap-3">
-             <Button type="button" variant="secondary" onClick={onClose} size="lg">取消</Button>
-             <Button type="submit" size="lg">提交记录</Button>
           </div>
         </div>
 
-        {/* Right Side: Teeth Selector - Decreased flex weight as UI is smaller */}
-        <div className="xl:border-l xl:pl-8 border-slate-100 flex flex-col min-w-0">
+        <div className="flex flex-col min-w-0">
            <label className="block text-base font-bold text-slate-700 mb-4 flex flex-wrap items-center gap-2">
              <Smile size={20} className="text-teal-600"/>
              选择牙位 
@@ -1545,6 +1645,11 @@ const AddTreatmentModal = ({ phone, onClose, onSuccess }: { phone: string, onClo
            <div className="flex-1 flex items-center justify-center bg-slate-50/50 rounded-2xl border-2 border-dashed border-slate-200 p-2 sm:p-4 min-w-0">
              <ToothSelector value={teeth} onChange={setTeeth} />
            </div>
+        </div>
+
+        <div className="pt-2 flex flex-wrap justify-end gap-3">
+           <Button type="button" variant="secondary" onClick={onClose} size="lg">取消</Button>
+           <Button type="submit" size="lg">提交记录</Button>
         </div>
       </form>
     </ModalBase>
@@ -1568,7 +1673,7 @@ const EditTreatmentModal = ({ phone, record, onClose, onSuccess }: { phone: stri
     
     // Try to find the item in current catalog
     for (const cat of catalog) {
-      const foundItem = cat.items.find(i => i.name === record.item);
+      const foundItem = cat.items.find(i => i.id === record.itemId || i.name === record.item);
       if (foundItem) {
         foundCatId = cat.id;
         foundItemId = foundItem.id;
@@ -1629,6 +1734,8 @@ const EditTreatmentModal = ({ phone, record, onClose, onSuccess }: { phone: stri
     const itemName = item ? item.name : record.item;
     
     const success = clinicService.updateTreatment(phone, record.id, {
+      categoryId: selectedCatId,
+      itemId: item?.id,
       item: itemName,
       price: price,
       teeth: teeth,
@@ -1646,10 +1753,9 @@ const EditTreatmentModal = ({ phone, record, onClose, onSuccess }: { phone: stri
 
   return (
     <ModalBase title="编辑处置记录" onClose={onClose} size="2xl">
-      <form onSubmit={handleSubmit} className="grid grid-cols-1 xl:grid-cols-[minmax(320px,0.95fr)_minmax(360px,0.9fr)] gap-6 xl:gap-8 min-h-0 items-start">
-        {/* Left Side: Form */}
-        <div className="space-y-5 flex flex-col min-w-0">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
+      <form onSubmit={handleSubmit} className="space-y-6 min-h-0">
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(320px,1fr)_220px_minmax(260px,0.9fr)] gap-4 lg:gap-6 items-start">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
                <label className="block text-base font-bold text-slate-700 mb-2">分类</label>
                <select className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none bg-white h-[54px]"
@@ -1673,20 +1779,14 @@ const EditTreatmentModal = ({ phone, record, onClose, onSuccess }: { phone: stri
             <p className="text-sm text-slate-400 mt-2">原价: ¥{currentCategory?.items.find(i => i.id === selectedItemId)?.price || 0}</p>
           </div>
 
-          <div className="flex-1">
+          <div>
             <label className="block text-base font-bold text-slate-700 mb-2">备注 (可选)</label>
-            <textarea className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none min-h-24 h-28 resize-none" 
+            <textarea className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none min-h-[54px] h-[54px] lg:h-[92px] resize-none"
               value={note} onChange={e => setNote(e.target.value)} />
-          </div>
-
-          <div className="pt-2 flex flex-wrap justify-end gap-3">
-             <Button type="button" variant="secondary" onClick={onClose} size="lg">取消</Button>
-             <Button type="submit" size="lg">保存更改</Button>
           </div>
         </div>
 
-        {/* Right Side: Teeth Selector */}
-        <div className="xl:border-l xl:pl-8 border-slate-100 flex flex-col min-w-0">
+        <div className="flex flex-col min-w-0">
            <label className="block text-base font-bold text-slate-700 mb-4 flex flex-wrap items-center gap-2">
              <Smile size={20} className="text-teal-600"/>
              选择牙位 
@@ -1695,6 +1795,11 @@ const EditTreatmentModal = ({ phone, record, onClose, onSuccess }: { phone: stri
            <div className="flex-1 flex items-center justify-center bg-slate-50/50 rounded-2xl border-2 border-dashed border-slate-200 p-2 sm:p-4 min-w-0">
              <ToothSelector value={teeth} onChange={setTeeth} />
            </div>
+        </div>
+
+        <div className="pt-2 flex flex-wrap justify-end gap-3">
+           <Button type="button" variant="secondary" onClick={onClose} size="lg">取消</Button>
+           <Button type="submit" size="lg">保存更改</Button>
         </div>
       </form>
     </ModalBase>
