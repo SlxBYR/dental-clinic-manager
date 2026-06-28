@@ -144,7 +144,7 @@ export default function App() {
       <aside className="w-64 bg-slate-900 text-slate-300 flex flex-col shadow-xl flex-shrink-0 relative">
         <div className="p-4 border-b border-slate-800">
           <div className="flex items-center gap-3 min-w-0">
-            <img src="/app-icon.png" alt="" className="h-11 w-11 rounded-xl bg-white object-cover shadow-sm flex-shrink-0" />
+            <img src="./app-icon.png" alt="" className="h-11 w-11 rounded-xl bg-white object-cover shadow-sm flex-shrink-0" />
             <div className="min-w-0 flex-1">
               <div className="font-bold text-lg leading-tight text-white truncate">{clinicName}</div>
               <div className="mt-1 flex items-center justify-between gap-2">
