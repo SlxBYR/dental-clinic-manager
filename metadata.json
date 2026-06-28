@@ -1,0 +1,5 @@
+{
+  "name": "Dental Clinic Manager",
+  "description": "A comprehensive dental clinic management system with patient records, treatment history, and appointment scheduling. Features a modern GUI replacing the CLI workflow.",
+  "requestFramePermissions": []
+}

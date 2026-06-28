@@ -1,0 +1,56 @@
+export interface TreatmentItem {
+  id: string; // unique ID for the catalog item
+  name: string;
+  price: number;
+}
+
+export interface TreatmentCategory {
+  id: string;
+  name: string;
+  items: TreatmentItem[];
+}
+
+export interface TreatmentRecord {
+  id: string;
+  date: string;
+  item: string; // Name of the item
+  price: number; // Charged price
+  teeth: string; // Selected teeth numbers or 'ALL', 'UPPER', etc.
+  note: string;
+}
+
+export interface Appointment {
+  datetime: string; // Format: YYYY-MM-DD HH:mm
+  created_at: string;
+}
+
+export interface Patient {
+  id: string; // Hidden unique ID
+  name: string;
+  phone: string;
+  gender: string;
+  age: string;
+  social?: string; // Legacy field preserved during migration/export, no longer shown in UI
+  treatments: TreatmentRecord[];
+  appointments: Appointment[];
+}
+
+export type AppointmentStatus = 'pending' | 'completed' | 'cancelled';
+
+export interface GlobalAppointment {
+  date: string; // YYYY-MM-DD
+  time: string; // HH:mm
+  patientId: string;
+  phone: string;
+  name: string;
+  status: AppointmentStatus;
+}
+
+// Data structure for persistence
+export interface ClinicData {
+  version?: number;
+  clinicName?: string; // Customizable title
+  patients: Record<string, Patient>;
+  appointments: Record<string, GlobalAppointment[]>;
+  catalog: TreatmentCategory[];
+}
