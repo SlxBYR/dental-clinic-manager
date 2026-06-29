@@ -63,7 +63,14 @@ export const Dashboard = ({ patients, onViewChange, onPatientClick, onRefresh }:
       <TreatmentContributionWall contribution={contribution} />
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-6">
-        <h3 className="text-xl font-bold text-slate-800 mb-4">今日预约列表</h3>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <h3 className="text-xl font-bold text-slate-800">今日预约列表</h3>
+          {todayAppts.length > 0 && (
+            <Button size="md" onClick={() => setShowAppointmentModal(true)}>
+              <Plus size={16} className="mr-2" /> 新建预约
+            </Button>
+          )}
+        </div>
         {todayAppts.length === 0 ? (
           <div className="text-center py-8 bg-slate-50 rounded-lg text-lg">
             <p className="text-slate-400">今日暂无预约</p>

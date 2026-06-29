@@ -74,11 +74,18 @@ export const ScheduleManager = ({ patients, onRefresh, onPatientClick }: { patie
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-        <div className="px-8 py-5 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
+        <div className="px-8 py-5 border-b border-slate-100 bg-slate-50/50 flex flex-wrap justify-between items-center gap-3">
            <h3 className="font-bold text-slate-700 text-lg">
              {mode === 'daily' ? `${date} 的预约` : `${date} 至 ${endDate} 的预约`}
            </h3>
-           <span className="text-sm text-slate-500 bg-white border border-slate-200 px-3 py-1 rounded-full">共 {appointments.length} 条</span>
+           <div className="flex items-center gap-3">
+             <span className="text-sm text-slate-500 bg-white border border-slate-200 px-3 py-1 rounded-full">共 {appointments.length} 条</span>
+             {appointments.length > 0 && (
+               <Button size="md" onClick={() => setShowAppointmentModal(true)}>
+                 <Plus size={16} className="mr-2" /> 新建预约
+               </Button>
+             )}
+           </div>
         </div>
         {appointments.length === 0 ? (
           <div className="p-16 text-center text-slate-400 text-lg">
