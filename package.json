@@ -1,7 +1,7 @@
 {
   "name": "dental-clinic-manager",
   "private": true,
-  "version": "1.1.13",
+  "version": "1.1.17",
   "type": "module",
   "main": "electron-main.js",
   "scripts": {
@@ -9,7 +9,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "electron": "concurrently \"npm run dev\" \"wait-on http://localhost:3000 && cross-env ELECTRON_START_URL=http://localhost:3000 electron .\"",
-    "electron:build": "npm run build && electron-builder --win --mac"
+    "electron:build": "npm run build && electron-builder --win --mac",
+    "electron:build:fresh-win": "npm run build && electron-builder --win nsis --x64 --config electron-builder.fresh.cjs",
+    "windows:uninstall-helper": "powershell -ExecutionPolicy Bypass -File scripts/windows-uninstall-dentalsystem.ps1"
   },
   "dependencies": {
     "lucide-react": "^0.562.0",
