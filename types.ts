@@ -62,6 +62,16 @@ export interface BackupSettings {
   token?: string;
 }
 
+export interface CloudSyncSettings {
+  endpoint: string;
+  key: string;
+}
+
+export interface CloudSyncResult {
+  success: boolean;
+  message: string;
+}
+
 export interface ReleaseSettings {
   endpoint: string;
   autoCheck: boolean;

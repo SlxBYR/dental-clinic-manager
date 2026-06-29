@@ -1,5 +1,5 @@
-import { ClinicData, Patient, GlobalAppointment, TreatmentCategory, TreatmentItem, AppointmentStatus, BackupSettings, BackupPayload, ReleaseSettings, ReleaseCheckResult } from '../types';
-import { STORAGE_KEY, BACKUP_SETTINGS_KEY, RELEASE_SETTINGS_KEY, DEFAULT_CATALOG, DATA_VERSION, APP_VERSION, DEFAULT_RELEASE_API_URL } from '../constants';
+import { ClinicData, Patient, GlobalAppointment, TreatmentCategory, TreatmentItem, AppointmentStatus, BackupSettings, BackupPayload, ReleaseSettings, ReleaseCheckResult, CloudSyncSettings, CloudSyncResult } from '../types';
+import { STORAGE_KEY, BACKUP_SETTINGS_KEY, CLOUD_SYNC_SETTINGS_KEY, RELEASE_SETTINGS_KEY, DEFAULT_CATALOG, DATA_VERSION, APP_VERSION, DEFAULT_RELEASE_API_URL } from '../constants';
 
 const normalizeName = (name: string) => name.trim().replace(/\s+/g, ' ').toLowerCase();
 const normalizePhone = (phone: string) => phone.trim().replace(/\s/g, '');
@@ -195,6 +195,130 @@ class ClinicService {
       endpoint: settings.endpoint.trim(),
       token: settings.token?.trim() || ''
     }));
+  }
+
+  getCloudSyncSettings(): CloudSyncSettings {
+    const stored = localStorage.getItem(CLOUD_SYNC_SETTINGS_KEY);
+    if (!stored) return { endpoint: '', key: '' };
+    try {
+      const parsed = JSON.parse(stored);
+      return {
+        endpoint: typeof parsed.endpoint === 'string' ? parsed.endpoint : '',
+        key: typeof parsed.key === 'string' ? parsed.key : ''
+      };
+    } catch (e) {
+      console.error('Failed to parse cloud sync settings', e);
+      return { endpoint: '', key: '' };
+    }
+  }
+
+  updateCloudSyncSettings(settings: CloudSyncSettings) {
+    localStorage.setItem(CLOUD_SYNC_SETTINGS_KEY, JSON.stringify({
+      endpoint: settings.endpoint.trim(),
+      key: settings.key.trim()
+    }));
+  }
+
+  // 云端同步只约定前端请求格式；key 到具体仓库/对象路径的映射由服务器实现。
+  private validateCloudSyncSettings(settings: CloudSyncSettings): { endpoint?: URL; key?: string; error?: string } {
+    const rawEndpoint = settings.endpoint.trim();
+    const key = settings.key.trim();
+    if (!rawEndpoint || !key) return { error: '请填写同步接口和同步 Key。' };
+
+    try {
+      const endpoint = new URL(rawEndpoint);
+      if (!['http:', 'https:'].includes(endpoint.protocol)) throw new Error('Invalid protocol');
+      return { endpoint, key };
+    } catch {
+      return { error: '同步接口地址格式不正确。' };
+    }
+  }
+
+  async pullCloudData(settings: CloudSyncSettings): Promise<CloudSyncResult> {
+    const validation = this.validateCloudSyncSettings(settings);
+    if (validation.error || !validation.endpoint || !validation.key) {
+      return { success: false, message: validation.error || '同步配置不可用。' };
+    }
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 20000);
+
+    try {
+      const response = await fetch(validation.endpoint.toString(), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${validation.key}`
+        },
+        body: JSON.stringify({
+          app: 'DentalClinicManager',
+          action: 'pull',
+          key: validation.key
+        }),
+        signal: controller.signal
+      });
+
+      if (!response.ok) {
+        return { success: false, message: `服务器返回 ${response.status} ${response.statusText || ''}`.trim() };
+      }
+
+      const payload = await response.json();
+      const remoteData = payload?.data || payload?.payload?.data || payload;
+      if (!remoteData?.patients || !remoteData?.appointments) {
+        return { success: false, message: '云端数据格式不正确。' };
+      }
+
+      this.data = migrateData(remoteData);
+      this.saveData();
+      return { success: true, message: '已从云端同步数据。' };
+    } catch (e) {
+      const message = e instanceof DOMException && e.name === 'AbortError'
+        ? '云端同步超时，请稍后再试。'
+        : '云端同步失败，请检查接口、Key、CORS 和网络连接。';
+      return { success: false, message };
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  }
+
+  async pushCloudData(settings: CloudSyncSettings): Promise<CloudSyncResult> {
+    const validation = this.validateCloudSyncSettings(settings);
+    if (validation.error || !validation.endpoint || !validation.key) {
+      return { success: false, message: validation.error || '同步配置不可用。' };
+    }
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 20000);
+
+    try {
+      const response = await fetch(validation.endpoint.toString(), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${validation.key}`
+        },
+        body: JSON.stringify({
+          app: 'DentalClinicManager',
+          action: 'push',
+          key: validation.key,
+          payload: this.createBackupPayload()
+        }),
+        signal: controller.signal
+      });
+
+      if (!response.ok) {
+        return { success: false, message: `服务器返回 ${response.status} ${response.statusText || ''}`.trim() };
+      }
+
+      return { success: true, message: '本机数据已上传到云端。' };
+    } catch (e) {
+      const message = e instanceof DOMException && e.name === 'AbortError'
+        ? '云端上传超时，请稍后再试。'
+        : '云端上传失败，请检查接口、Key、CORS 和网络连接。';
+      return { success: false, message };
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
   }
 
   getReleaseSettings(): ReleaseSettings {
