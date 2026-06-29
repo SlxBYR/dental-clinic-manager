@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Calendar, Edit2, Phone, Save, Stethoscope, Trash2 } from 'lucide-react';
+import { Calendar, Edit2, History, Phone, Save, Stethoscope, Trash2 } from 'lucide-react';
 import { clinicService } from '../services/clinicService';
 import { Patient, TreatmentRecord } from '../types';
 import { Button } from '../components/Button';
@@ -7,6 +7,7 @@ import { AddAppointmentModal } from '../modals/AddAppointmentModal';
 import { AddTreatmentModal } from '../modals/AddTreatmentModal';
 import { ConfirmationModal } from '../modals/ConfirmationModal';
 import { EditTreatmentModal } from '../modals/EditTreatmentModal';
+import { TreatmentChangeLogModal } from '../modals/TreatmentChangeLogModal';
 import { getAppointmentStatusClass, getAppointmentStatusLabel } from '../utils/statusStyles';
 
 export const PatientDetail = ({ patient, onBack, onRefresh }: { patient: Patient, onBack: () => void, onRefresh: () => void }) => {
@@ -20,6 +21,7 @@ export const PatientDetail = ({ patient, onBack, onRefresh }: { patient: Patient
 
   // 处置编辑和删除弹窗状态集中在详情页，避免跨页面传递临时状态。
   const [editingTreatment, setEditingTreatment] = useState<TreatmentRecord | null>(null);
+  const [viewingTreatmentLogs, setViewingTreatmentLogs] = useState<TreatmentRecord | null>(null);
   const [deleteTreatmentId, setDeleteTreatmentId] = useState<string | null>(null);
 
   const handleSaveInfo = () => {
@@ -174,8 +176,8 @@ export const PatientDetail = ({ patient, onBack, onRefresh }: { patient: Patient
                  <Button className="mt-6" size="lg" onClick={() => setShowTreatmentModal(true)}>添加第一条记录</Button>
                </div>
             ) : (
-              patient.treatments.slice().reverse().map((t, i) => (
-                <div key={i} className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-6 hover:shadow-md transition-shadow">
+              patient.treatments.slice().reverse().map((t) => (
+                <div key={t.id} className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-6 hover:shadow-md transition-shadow">
                   <div className="md:w-56 flex-shrink-0 border-r border-slate-100 pr-6">
                     <div className="text-slate-500 text-sm mb-1">日期</div>
                     <div className="font-bold text-slate-800 text-xl">{t.date}</div>
@@ -191,6 +193,9 @@ export const PatientDetail = ({ patient, onBack, onRefresh }: { patient: Patient
                          </div>
                        </div>
                        <div className="flex gap-2">
+                          <button onClick={() => setViewingTreatmentLogs(t)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="修改记录">
+                             <History size={18} />
+                          </button>
                           <button onClick={() => setEditingTreatment(t)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="编辑记录">
                              <Edit2 size={18} />
                           </button>
@@ -258,6 +263,13 @@ export const PatientDetail = ({ patient, onBack, onRefresh }: { patient: Patient
            record={editingTreatment}
            onClose={() => setEditingTreatment(null)}
            onSuccess={() => { setEditingTreatment(null); onRefresh(); }}
+        />
+      )}
+
+      {viewingTreatmentLogs && (
+        <TreatmentChangeLogModal
+          record={viewingTreatmentLogs}
+          onClose={() => setViewingTreatmentLogs(null)}
         />
       )}
 

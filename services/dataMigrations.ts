@@ -1,5 +1,5 @@
 import { DEFAULT_CATALOG, DATA_VERSION } from '../constants';
-import { Appointment, AppointmentStatus, ClinicData, GlobalAppointment, Patient, TreatmentRecord } from '../types';
+import { Appointment, AppointmentStatus, ClinicData, GlobalAppointment, Patient, TreatmentChangeLog, TreatmentRecord } from '../types';
 
 const normalizeName = (name: string) => name.trim().replace(/\s+/g, ' ').toLowerCase();
 const normalizePhone = (phone: string) => phone.trim().replace(/\s/g, '');
@@ -37,17 +37,51 @@ export const normalizeAppointmentStatus = (status: unknown): AppointmentStatus =
   return 'pending';
 };
 
-const normalizeTreatment = (record: any, index: number): TreatmentRecord => ({
-  id: typeof record?.id === 'string' && record.id.trim() ? record.id : `treatment_${Date.now()}_${index}`,
-  date: typeof record?.date === 'string' && record.date.trim() ? record.date : new Date().toISOString().slice(0, 10),
-  createdAt: typeof record?.createdAt === 'string' ? record.createdAt : undefined,
-  categoryId: typeof record?.categoryId === 'string' ? record.categoryId : undefined,
-  itemId: typeof record?.itemId === 'string' ? record.itemId : undefined,
-  item: typeof record?.item === 'string' ? record.item : '未命名处置',
-  price: typeof record?.price === 'number' ? record.price : Number(record?.price) || 0,
-  teeth: typeof record?.teeth === 'string' ? record.teeth : '',
-  note: typeof record?.note === 'string' ? record.note : ''
+const normalizeLogValueMap = (value: any): Record<string, string | number | undefined> => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.entries(value).reduce<Record<string, string | number | undefined>>((result, [key, fieldValue]) => {
+    if (typeof fieldValue === 'string' || typeof fieldValue === 'number' || fieldValue === undefined) {
+      result[key] = fieldValue;
+    } else if (fieldValue === null) {
+      result[key] = undefined;
+    } else {
+      result[key] = String(fieldValue);
+    }
+    return result;
+  }, {});
+};
+
+const normalizeTreatmentChangeLog = (log: any, treatmentId: string, index: number): TreatmentChangeLog => ({
+  id: typeof log?.id === 'string' && log.id.trim()
+    ? log.id
+    : `tlog_${sanitizeIdPart(treatmentId)}_${index}`,
+  changedAt: typeof log?.changedAt === 'string' && log.changedAt.trim() ? log.changedAt : new Date().toISOString(),
+  changedFields: Array.isArray(log?.changedFields)
+    ? log.changedFields.filter((field: unknown): field is string => typeof field === 'string' && field.trim().length > 0)
+    : [],
+  before: normalizeLogValueMap(log?.before),
+  after: normalizeLogValueMap(log?.after),
+  note: typeof log?.note === 'string' ? log.note : undefined
 });
+
+const normalizeTreatment = (record: any, index: number): TreatmentRecord => {
+  const id = typeof record?.id === 'string' && record.id.trim() ? record.id : `treatment_${Date.now()}_${index}`;
+
+  return {
+    id,
+    date: typeof record?.date === 'string' && record.date.trim() ? record.date : new Date().toISOString().slice(0, 10),
+    createdAt: typeof record?.createdAt === 'string' ? record.createdAt : undefined,
+    categoryId: typeof record?.categoryId === 'string' ? record.categoryId : undefined,
+    itemId: typeof record?.itemId === 'string' ? record.itemId : undefined,
+    item: typeof record?.item === 'string' ? record.item : '未命名处置',
+    price: typeof record?.price === 'number' ? record.price : Number(record?.price) || 0,
+    teeth: typeof record?.teeth === 'string' ? record.teeth : '',
+    note: typeof record?.note === 'string' ? record.note : '',
+    changeLogs: Array.isArray(record?.changeLogs)
+      ? record.changeLogs.map((log: any, logIndex: number) => normalizeTreatmentChangeLog(log, id, logIndex))
+      : []
+  };
+};
 
 const makePatientAppointment = (appt: GlobalAppointment, createdAt?: string): Appointment => ({
   id: appt.id,
@@ -199,6 +233,19 @@ export const validateClinicData = (data: ClinicData): { valid: true } | { valid:
       if (typeof treatment.item !== 'string') return { valid: false, message: `患者 ${patient.name} 的处置项目字段类型不正确。` };
       if (typeof treatment.price !== 'number') return { valid: false, message: `患者 ${patient.name} 的处置价格字段类型不正确。` };
       if (typeof treatment.teeth !== 'string') return { valid: false, message: `患者 ${patient.name} 的牙位字段类型不正确。` };
+      if (!Array.isArray(treatment.changeLogs)) return { valid: false, message: `患者 ${patient.name} 的处置修改日志格式不正确。` };
+      const treatmentLogIds = new Set<string>();
+      for (const log of treatment.changeLogs) {
+        if (typeof log.id !== 'string' || !log.id.trim()) return { valid: false, message: `处置 ${treatment.id} 存在缺少 id 的修改日志。` };
+        if (treatmentLogIds.has(log.id)) return { valid: false, message: `处置 ${treatment.id} 的修改日志 id 重复：${log.id}` };
+        treatmentLogIds.add(log.id);
+        if (typeof log.changedAt !== 'string' || !log.changedAt.trim()) return { valid: false, message: `处置 ${treatment.id} 存在缺少修改时间的日志。` };
+        if (!Array.isArray(log.changedFields) || log.changedFields.some(field => typeof field !== 'string')) {
+          return { valid: false, message: `处置 ${treatment.id} 的修改字段列表格式不正确。` };
+        }
+        if (!log.before || typeof log.before !== 'object' || Array.isArray(log.before)) return { valid: false, message: `处置 ${treatment.id} 的修改前数据格式不正确。` };
+        if (!log.after || typeof log.after !== 'object' || Array.isArray(log.after)) return { valid: false, message: `处置 ${treatment.id} 的修改后数据格式不正确。` };
+      }
     }
   }
 

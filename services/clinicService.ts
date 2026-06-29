@@ -1,4 +1,4 @@
-import { ClinicData, Patient, GlobalAppointment, TreatmentCategory, TreatmentItem, AppointmentStatus, BackupSettings, BackupPayload, ReleaseSettings, ReleaseCheckResult, CloudSyncSettings, CloudSyncResult } from '../types';
+import { ClinicData, Patient, GlobalAppointment, TreatmentCategory, TreatmentItem, AppointmentStatus, BackupSettings, BackupPayload, ReleaseSettings, ReleaseCheckResult, CloudSyncSettings, CloudSyncResult, TreatmentRecord } from '../types';
 import { STORAGE_KEY, BACKUP_SETTINGS_KEY, CLOUD_SYNC_SETTINGS_KEY, RELEASE_SETTINGS_KEY, DEFAULT_CATALOG, DATA_VERSION, APP_VERSION, DEFAULT_RELEASE_API_URL } from '../constants';
 import { createAppointmentId, migrateClinicData, validateClinicData } from './dataMigrations';
 
@@ -37,6 +37,20 @@ const compareVersions = (a: string, b: string) => {
     if (diff !== 0) return diff;
   }
   return 0;
+};
+
+const TREATMENT_LOG_FIELDS: Array<keyof Pick<TreatmentRecord, 'categoryId' | 'itemId' | 'item' | 'price' | 'teeth' | 'note'>> = [
+  'categoryId',
+  'itemId',
+  'item',
+  'price',
+  'teeth',
+  'note'
+];
+
+const createTreatmentLogId = (recordId: string) => {
+  const suffix = Math.random().toString(36).slice(2, 8);
+  return `tlog_${recordId}_${Date.now().toString(36)}_${suffix}`;
 };
 
 const ensureUniqueId = (baseId: string, patients: Record<string, Patient>) => {
@@ -530,7 +544,8 @@ class ClinicService {
       item: item.name,
       price: price,
       teeth,
-      note
+      note,
+      changeLogs: []
     };
 
     patient.treatments.push(record);
@@ -543,7 +558,38 @@ class ClinicService {
     if (patient) {
       const index = patient.treatments.findIndex(t => t.id === recordId);
       if (index !== -1) {
-        patient.treatments[index] = { ...patient.treatments[index], ...updates };
+        const current = patient.treatments[index];
+        const before: Record<string, string | number | undefined> = {};
+        const after: Record<string, string | number | undefined> = {};
+        const changedFields: string[] = [];
+
+        TREATMENT_LOG_FIELDS.forEach(field => {
+          if (!(field in updates)) return;
+          const oldValue = current[field] as string | number | undefined;
+          const newValue = updates[field] as string | number | undefined;
+          if (!Object.is(oldValue, newValue)) {
+            before[field] = oldValue;
+            after[field] = newValue;
+            changedFields.push(field);
+          }
+        });
+
+        if (changedFields.length === 0) return true;
+
+        patient.treatments[index] = {
+          ...current,
+          ...updates,
+          changeLogs: [
+            ...(Array.isArray(current.changeLogs) ? current.changeLogs : []),
+            {
+              id: createTreatmentLogId(recordId),
+              changedAt: new Date().toISOString(),
+              changedFields,
+              before,
+              after
+            }
+          ]
+        };
         this.saveData();
         return true;
       }

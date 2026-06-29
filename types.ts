@@ -10,6 +10,15 @@ export interface TreatmentCategory {
   items: TreatmentItem[];
 }
 
+export interface TreatmentChangeLog {
+  id: string;
+  changedAt: string;
+  changedFields: string[];
+  before: Record<string, string | number | undefined>;
+  after: Record<string, string | number | undefined>;
+  note?: string;
+}
+
 export interface TreatmentRecord {
   id: string;
   date: string;
@@ -20,6 +29,7 @@ export interface TreatmentRecord {
   price: number; // Charged price
   teeth: string; // 可为空；也可为具体牙位、ALL、UPPER、LOWER 等。
   note: string;
+  changeLogs: TreatmentChangeLog[]; // 处置编辑审计日志；旧数据迁移时补齐为空数组。
 }
 
 export interface Appointment {
