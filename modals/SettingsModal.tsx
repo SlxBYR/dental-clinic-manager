@@ -23,7 +23,10 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
   const [releaseStatus, setReleaseStatus] = useState<ReleaseCheckResult | null>(null);
   const [isCheckingRelease, setIsCheckingRelease] = useState(false);
   const [pendingImportContent, setPendingImportContent] = useState<string | null>(null);
+  const [showRestoreConfirm, setShowRestoreConfirm] = useState(false);
   const [importStatus, setImportStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [hasPreImportBackup, setHasPreImportBackup] = useState(clinicService.hasPreImportBackup());
+  const [storageStatus] = useState(clinicService.getStorageStatus());
 
   // 处置目录直接影响新增处置时的默认价格。
   const [catalog, setCatalog] = useState<TreatmentCategory[]>(clinicService.getCatalog());
@@ -132,10 +135,20 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
     e.target.value = '';
   };
 
-  const confirmImport = () => {
+  const confirmImport = async () => {
     if (!pendingImportContent) return;
-    const result = clinicService.importData(pendingImportContent);
+    const result = await clinicService.importData(pendingImportContent);
     setPendingImportContent(null);
+    setImportStatus({ type: result.success ? 'success' : 'error', message: result.message });
+    if (result.success) {
+      setHasPreImportBackup(clinicService.hasPreImportBackup());
+      onRefresh();
+    }
+  };
+
+  const confirmRestorePreImportBackup = async () => {
+    const result = await clinicService.restorePreImportBackup();
+    setShowRestoreConfirm(false);
     setImportStatus({ type: result.success ? 'success' : 'error', message: result.message });
     if (result.success) onRefresh();
   };
@@ -227,7 +240,7 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
 
       {tab === 'data' && (
         <div className="space-y-8">
-           <div className="bg-slate-50 p-8 rounded-xl border border-slate-200">
+          <div className="bg-slate-50 p-8 rounded-xl border border-slate-200">
             <h4 className="font-bold text-slate-800 mb-4 flex items-center gap-2 text-lg">
               <Settings size={24} className="text-teal-600" /> 基本设置
             </h4>
@@ -237,6 +250,9 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
                  <input className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none focus:ring-2 focus:ring-teal-500" value={clinicNameForm} onChange={e => setClinicNameForm(e.target.value)} />
               </div>
               <Button onClick={handleSaveClinicName} size="lg">保存名称</Button>
+            </div>
+            <div className="mt-5 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+              当前主存储：{storageStatus.primary === 'sqlite' ? 'SQLite' : 'localStorage'}。{storageStatus.message}
             </div>
           </div>
 
@@ -433,6 +449,20 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
             />
             <Button variant="secondary" onClick={() => fileInputRef.current?.click()} size="lg">选择文件导入</Button>
           </div>
+
+          <div className="bg-slate-50 p-8 rounded-xl border border-slate-200">
+            <h4 className="font-bold text-slate-800 mb-2 flex items-center gap-2 text-lg">
+              <RefreshCw size={24} className="text-red-600" /> 恢复导入前备份
+            </h4>
+            <p className="text-base text-slate-500 mb-6">
+              仅用于撤回最近一次导入覆盖。恢复前建议先导出当前数据。
+            </p>
+            {hasPreImportBackup ? (
+              <Button variant="danger" onClick={() => setShowRestoreConfirm(true)} size="lg">恢复导入前备份</Button>
+            ) : (
+              <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-slate-400">暂无导入前备份</div>
+            )}
+          </div>
         </div>
       )}
 
@@ -519,6 +549,16 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
           confirmLabel="确认覆盖导入"
           onConfirm={confirmImport}
           onCancel={() => setPendingImportContent(null)}
+        />
+      )}
+
+      {showRestoreConfirm && (
+        <ConfirmationModal
+          title="恢复导入前备份确认"
+          message="恢复导入前备份会覆盖当前本机数据，并写回当前主存储。此操作不能通过普通撤销恢复，建议先导出当前数据后再继续。"
+          confirmLabel="确认恢复备份"
+          onConfirm={confirmRestorePreImportBackup}
+          onCancel={() => setShowRestoreConfirm(false)}
         />
       )}
     </ModalBase>

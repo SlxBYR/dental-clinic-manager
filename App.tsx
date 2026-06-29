@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { Calendar, LayoutDashboard, Settings, Users } from 'lucide-react';
+import { BarChart3, Calendar, LayoutDashboard, Settings, Users } from 'lucide-react';
 import { APP_VERSION } from './constants';
 import { SidebarItem } from './components/SidebarItem';
 import { SettingsModal } from './modals/SettingsModal';
 import { Dashboard } from './pages/Dashboard';
 import { PatientDetail } from './pages/PatientDetail';
 import { PatientList } from './pages/PatientList';
+import { Reports } from './pages/Reports';
 import { ScheduleManager } from './pages/ScheduleManager';
 import { clinicService } from './services/clinicService';
 import { View } from './appTypes';
@@ -51,6 +52,8 @@ export default function App() {
         return <PatientList patients={patients} onSelect={handlePatientClick} onRefresh={refreshData} />;
       case 'schedule':
         return <ScheduleManager patients={patients} onRefresh={refreshData} onPatientClick={handlePatientClick} />;
+      case 'reports':
+        return <Reports patients={patients} onPatientClick={handlePatientClick} />;
       default:
         return <Dashboard onViewChange={setCurrentView} patients={patients} onPatientClick={handlePatientClick} onRefresh={refreshData} />;
     }
@@ -96,6 +99,12 @@ export default function App() {
             label="日程预约"
             active={currentView === 'schedule'}
             onClick={() => { setSelectedPatientId(null); setCurrentView('schedule'); }}
+          />
+          <SidebarItem
+            icon={<BarChart3 size={20} />}
+            label="统计报表"
+            active={currentView === 'reports'}
+            onClick={() => { setSelectedPatientId(null); setCurrentView('reports'); }}
           />
         </nav>
       </aside>

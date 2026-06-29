@@ -1,6 +1,9 @@
 import { ClinicData, Patient, GlobalAppointment, TreatmentCategory, TreatmentItem, AppointmentStatus, BackupSettings, BackupPayload, ReleaseSettings, ReleaseCheckResult, CloudSyncSettings, CloudSyncResult, TreatmentRecord } from '../types';
 import { STORAGE_KEY, BACKUP_SETTINGS_KEY, CLOUD_SYNC_SETTINGS_KEY, RELEASE_SETTINGS_KEY, DEFAULT_CATALOG, DATA_VERSION, APP_VERSION, DEFAULT_RELEASE_API_URL } from '../constants';
 import { createAppointmentId, migrateClinicData, validateClinicData } from './dataMigrations';
+import { ElectronSqliteStore } from './storage/electronSqliteStore';
+import { LocalStorageStore } from './storage/localStorageStore';
+import { CLINIC_DATA_STORE_KEY, KeyValueStore } from './storage/types';
 
 const normalizeName = (name: string) => name.trim().replace(/\s+/g, ' ').toLowerCase();
 const normalizePhone = (phone: string) => phone.trim().replace(/\s/g, '');
@@ -69,34 +72,144 @@ const createEmptyData = (): ClinicData => ({
   clinicName: 'DentalClinic'
 });
 
-const getInitialData = (): ClinicData => {
-  const stored = localStorage.getItem(STORAGE_KEY);
-  if (stored) {
-    try {
-      const parsed = JSON.parse(stored);
-      const migrated = migrateClinicData(parsed);
-      if (JSON.stringify(parsed) !== JSON.stringify(migrated)) {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated));
-      }
-      return migrated;
-    } catch (e) {
-      console.error("Failed to parse data", e);
-    }
-  }
-  return createEmptyData();
+const parseAndValidateClinicData = (rawJson: string): ClinicData => {
+  const parsed = JSON.parse(rawJson);
+  const migrated = migrateClinicData(parsed);
+  const validation = validateClinicData(migrated);
+  if (!validation.valid) throw new Error(validation.message);
+  return migrated;
 };
 
 class ClinicService {
-  private data: ClinicData;
+  private data: ClinicData = createEmptyData();
+  private store: KeyValueStore = new LocalStorageStore();
+  private localStore = new LocalStorageStore();
+  private initialized = false;
+  private initPromise: Promise<void> | null = null;
+  private storageStatus = {
+    primary: 'localStorage',
+    message: '正在初始化本地存储。'
+  };
 
-  constructor() {
-    this.data = getInitialData();
+  initialize(): Promise<void> {
+    if (this.initPromise) return this.initPromise;
+    this.initPromise = this.loadInitialData();
+    return this.initPromise;
+  }
+
+  private async loadInitialData() {
+    const sqliteStore = new ElectronSqliteStore();
+    if (sqliteStore.isAvailable()) {
+      const status = await sqliteStore.getStatus();
+      if (status.available) {
+        try {
+          const sqliteValue = await sqliteStore.getItem(CLINIC_DATA_STORE_KEY);
+          if (sqliteValue) {
+            this.data = parseAndValidateClinicData(sqliteValue);
+            this.store = sqliteStore;
+            this.storageStatus = {
+              primary: 'sqlite',
+              message: status.dbPath ? `SQLite 数据库：${status.dbPath}` : 'SQLite 数据库已启用。'
+            };
+            await this.saveDataAsync();
+            this.initialized = true;
+            return;
+          }
+
+          const legacyValue = await this.localStore.getItem(CLINIC_DATA_STORE_KEY);
+          if (legacyValue) {
+            this.data = parseAndValidateClinicData(legacyValue);
+            this.store = sqliteStore;
+            this.storageStatus = {
+              primary: 'sqlite',
+              message: '已从旧 localStorage 迁移到 SQLite，旧数据仍保留作为兜底。'
+            };
+            await this.saveDataAsync();
+            this.initialized = true;
+            return;
+          }
+
+          this.data = createEmptyData();
+          this.store = sqliteStore;
+          this.storageStatus = {
+            primary: 'sqlite',
+            message: status.dbPath ? `SQLite 数据库：${status.dbPath}` : 'SQLite 数据库已启用。'
+          };
+          await this.saveDataAsync();
+          this.initialized = true;
+          return;
+        } catch (error) {
+          console.error('SQLite 数据读取失败，回退 localStorage。', error);
+          this.storageStatus = {
+            primary: 'localStorage',
+            message: `SQLite 数据读取失败，已回退 localStorage：${error instanceof Error ? error.message : String(error)}`
+          };
+        }
+      } else if (status.error) {
+        this.storageStatus = {
+          primary: 'localStorage',
+          message: `SQLite 初始化失败，已回退 localStorage：${status.error}`
+        };
+      }
+    }
+
+    await this.loadFromLocalStorageFallback();
+    this.initialized = true;
+  }
+
+  private async loadFromLocalStorageFallback() {
+    const stored = await this.localStore.getItem(CLINIC_DATA_STORE_KEY);
+    if (stored) {
+      try {
+        this.data = parseAndValidateClinicData(stored);
+        this.store = this.localStore;
+        await this.saveDataAsync();
+        return;
+      } catch (error) {
+        console.error('localStorage 数据读取失败，使用空数据。', error);
+        this.storageStatus = {
+          primary: 'localStorage',
+          message: `localStorage 数据读取失败，已使用空数据：${error instanceof Error ? error.message : String(error)}`
+        };
+      }
+    }
+    this.data = createEmptyData();
+    this.store = this.localStore;
+    await this.saveDataAsync();
+  }
+
+  private ensureInitialized() {
+    if (!this.initialized) {
+      console.warn('clinicService 尚未完成初始化，当前使用内存中的默认数据。');
+    }
+  }
+
+  async saveDataAsync() {
+    this.data.version = DATA_VERSION;
+    this.data.dataVersion = DATA_VERSION;
+    const serialized = JSON.stringify(this.data);
+    await this.localStore.setItem(CLINIC_DATA_STORE_KEY, serialized);
+    if (this.store.name === this.localStore.name) return;
+    try {
+      await this.store.setItem(CLINIC_DATA_STORE_KEY, serialized);
+    } catch (error) {
+      this.store = this.localStore;
+      this.storageStatus = {
+        primary: 'localStorage',
+        message: `SQLite 写入失败，已回退 localStorage：${error instanceof Error ? error.message : String(error)}`
+      };
+      throw error;
+    }
   }
 
   saveData() {
-    this.data.version = DATA_VERSION;
-    this.data.dataVersion = DATA_VERSION;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
+    this.saveDataAsync().catch(error => {
+      console.error('保存数据失败。', error);
+    });
+  }
+
+  getStorageStatus() {
+    return this.storageStatus;
   }
 
   // --- Settings ---
@@ -224,7 +337,7 @@ class ClinicService {
         return { success: false, message: `云端数据校验失败：${validation.message}` };
       }
       this.data = migrated;
-      this.saveData();
+      await this.saveDataAsync();
       return { success: true, message: '已从云端同步数据。' };
     } catch (e) {
       const message = e instanceof DOMException && e.name === 'AbortError'
@@ -423,17 +536,31 @@ class ClinicService {
     }
   }
 
-  importData(jsonString: string): { success: boolean; message: string } {
+  hasPreImportBackup(): boolean {
+    return Boolean(localStorage.getItem(`${STORAGE_KEY}_pre_import_backup`));
+  }
+
+  async restorePreImportBackup(): Promise<{ success: boolean; message: string }> {
+    const backup = localStorage.getItem(`${STORAGE_KEY}_pre_import_backup`);
+    if (!backup) return { success: false, message: '暂无导入前备份可恢复。' };
+
     try {
-      const parsed = JSON.parse(jsonString);
-      const migrated = migrateClinicData(parsed);
-      const validation = validateClinicData(migrated);
-      if (!validation.valid) {
-        return { success: false, message: validation.message };
-      }
+      const migrated = parseAndValidateClinicData(backup);
+      localStorage.setItem(`${STORAGE_KEY}_pre_restore_backup`, this.exportData());
+      this.data = migrated;
+      await this.saveDataAsync();
+      return { success: true, message: '已恢复导入前备份。恢复前数据已保存在本机恢复前备份中。' };
+    } catch (error) {
+      return { success: false, message: error instanceof Error ? `恢复失败：${error.message}` : '恢复失败，备份数据无法解析。' };
+    }
+  }
+
+  async importData(jsonString: string): Promise<{ success: boolean; message: string }> {
+    try {
+      const migrated = parseAndValidateClinicData(jsonString);
       localStorage.setItem(`${STORAGE_KEY}_pre_import_backup`, this.exportData());
       this.data = migrated;
-      this.saveData();
+      await this.saveDataAsync();
       return { success: true, message: '导入成功。导入前数据已保存在本机预导入备份中。' };
     } catch (e) {
       console.error("Import failed", e);
