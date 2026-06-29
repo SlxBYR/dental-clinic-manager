@@ -43,4 +43,4 @@ export const CLOUD_SYNC_SETTINGS_KEY = 'dental_clinic_cloud_sync_settings_v1';
 export const RELEASE_SETTINGS_KEY = 'dental_clinic_release_settings_v1';
 export const DEFAULT_RELEASE_API_URL = 'https://api.github.com/repos/SlxBYR/dental-clinic-manager/releases/latest';
 export const DATA_VERSION = 5;
-export const APP_VERSION = '1.1.10';
+export const APP_VERSION = '1.1.11';
