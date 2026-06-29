@@ -18,6 +18,6 @@ npx electron-builder --win nsis portable --x64
 
 echo
 echo "Done."
-echo "macOS arm64 DMG: release/DentalSystem-0.0.2-arm64.dmg"
-echo "Windows x64 installer: release/DentalSystem Setup 0.0.2.exe"
-echo "Windows x64 portable: release/DentalSystem 0.0.2.exe"
+echo "macOS arm64 DMG: release/DentalSystem-0.0.3-arm64.dmg"
+echo "Windows x64 installer: release/DentalSystem Setup 0.0.3.exe"
+echo "Windows x64 portable: release/DentalSystem 0.0.3.exe"

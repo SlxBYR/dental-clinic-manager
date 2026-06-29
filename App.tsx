@@ -20,12 +20,14 @@ import {
   Check,
   CheckCircle,
   Circle,
-  AlertTriangle
+  AlertTriangle,
+  RefreshCw,
+  ExternalLink
 } from 'lucide-react';
 // @ts-ignore
 import * as pinyin from 'tiny-pinyin';
 import { clinicService } from './services/clinicService';
-import { Patient, TreatmentCategory, TreatmentItem, GlobalAppointment, TreatmentRecord } from './types';
+import { Patient, TreatmentCategory, TreatmentItem, GlobalAppointment, TreatmentRecord, ReleaseCheckResult } from './types';
 import { Button } from './components/Button';
 import { APP_VERSION } from './constants';
 
@@ -909,45 +911,77 @@ const TOOTH_POINTS: ToothPoint[] = [
 ];
 
 type ToothImagePoint = {
-  id: number;
+  value: string;
+  label: string;
+  groupKey: string;
+  kind: 'permanent' | 'primary';
+  arch: 'upper' | 'lower';
   left: number;
   top: number;
+  size: 'md' | 'sm';
 };
 
 const TOOTH_IMAGE_POINTS: ToothImagePoint[] = [
-  { id: 18, left: 3.3, top: 34.2 },
-  { id: 17, left: 9.3, top: 34.2 },
-  { id: 16, left: 15.3, top: 34.2 },
-  { id: 15, left: 21.3, top: 34.2 },
-  { id: 14, left: 27.3, top: 34.2 },
-  { id: 13, left: 33.3, top: 34.2 },
-  { id: 12, left: 39.4, top: 34.2 },
-  { id: 11, left: 45.4, top: 34.2 },
-  { id: 21, left: 51.9, top: 34.2 },
-  { id: 22, left: 58.0, top: 34.2 },
-  { id: 23, left: 64.0, top: 34.2 },
-  { id: 24, left: 70.0, top: 34.2 },
-  { id: 25, left: 76.0, top: 34.2 },
-  { id: 26, left: 82.0, top: 34.2 },
-  { id: 27, left: 88.0, top: 34.2 },
-  { id: 28, left: 94.1, top: 34.2 },
-  { id: 48, left: 3.3, top: 69.2 },
-  { id: 47, left: 9.3, top: 69.2 },
-  { id: 46, left: 15.3, top: 69.2 },
-  { id: 45, left: 21.3, top: 69.2 },
-  { id: 44, left: 27.3, top: 69.2 },
-  { id: 43, left: 33.3, top: 69.2 },
-  { id: 42, left: 39.4, top: 69.2 },
-  { id: 41, left: 45.4, top: 69.2 },
-  { id: 31, left: 51.9, top: 69.2 },
-  { id: 32, left: 58.0, top: 69.2 },
-  { id: 33, left: 64.0, top: 69.2 },
-  { id: 34, left: 70.0, top: 69.2 },
-  { id: 35, left: 76.0, top: 69.2 },
-  { id: 36, left: 82.0, top: 69.2 },
-  { id: 37, left: 88.0, top: 69.2 },
-  { id: 38, left: 94.1, top: 69.2 },
+  { value: '18', label: '8', groupKey: 'UR-8', kind: 'permanent', arch: 'upper', left: 3.3, top: 34.2, size: 'md' },
+  { value: '17', label: '7', groupKey: 'UR-7', kind: 'permanent', arch: 'upper', left: 9.3, top: 34.2, size: 'md' },
+  { value: '16', label: '6', groupKey: 'UR-6', kind: 'permanent', arch: 'upper', left: 15.3, top: 34.2, size: 'md' },
+  { value: '15', label: '5', groupKey: 'UR-5', kind: 'permanent', arch: 'upper', left: 21.3, top: 34.2, size: 'md' },
+  { value: '14', label: '4', groupKey: 'UR-4', kind: 'permanent', arch: 'upper', left: 27.3, top: 34.2, size: 'md' },
+  { value: '13', label: '3', groupKey: 'UR-3', kind: 'permanent', arch: 'upper', left: 33.3, top: 34.2, size: 'md' },
+  { value: '12', label: '2', groupKey: 'UR-2', kind: 'permanent', arch: 'upper', left: 39.4, top: 34.2, size: 'md' },
+  { value: '11', label: '1', groupKey: 'UR-1', kind: 'permanent', arch: 'upper', left: 45.4, top: 34.2, size: 'md' },
+  { value: '21', label: '1', groupKey: 'UL-1', kind: 'permanent', arch: 'upper', left: 51.9, top: 34.2, size: 'md' },
+  { value: '22', label: '2', groupKey: 'UL-2', kind: 'permanent', arch: 'upper', left: 58.0, top: 34.2, size: 'md' },
+  { value: '23', label: '3', groupKey: 'UL-3', kind: 'permanent', arch: 'upper', left: 64.0, top: 34.2, size: 'md' },
+  { value: '24', label: '4', groupKey: 'UL-4', kind: 'permanent', arch: 'upper', left: 70.0, top: 34.2, size: 'md' },
+  { value: '25', label: '5', groupKey: 'UL-5', kind: 'permanent', arch: 'upper', left: 76.0, top: 34.2, size: 'md' },
+  { value: '26', label: '6', groupKey: 'UL-6', kind: 'permanent', arch: 'upper', left: 82.0, top: 34.2, size: 'md' },
+  { value: '27', label: '7', groupKey: 'UL-7', kind: 'permanent', arch: 'upper', left: 88.0, top: 34.2, size: 'md' },
+  { value: '28', label: '8', groupKey: 'UL-8', kind: 'permanent', arch: 'upper', left: 94.1, top: 34.2, size: 'md' },
+  { value: '右上E', label: 'E', groupKey: 'UR-5', kind: 'primary', arch: 'upper', left: 21.3, top: 42.9, size: 'sm' },
+  { value: '右上D', label: 'D', groupKey: 'UR-4', kind: 'primary', arch: 'upper', left: 27.3, top: 42.9, size: 'sm' },
+  { value: '右上C', label: 'C', groupKey: 'UR-3', kind: 'primary', arch: 'upper', left: 33.3, top: 42.9, size: 'sm' },
+  { value: '右上B', label: 'B', groupKey: 'UR-2', kind: 'primary', arch: 'upper', left: 39.4, top: 42.9, size: 'sm' },
+  { value: '右上A', label: 'A', groupKey: 'UR-1', kind: 'primary', arch: 'upper', left: 45.4, top: 42.9, size: 'sm' },
+  { value: '左上A', label: 'A', groupKey: 'UL-1', kind: 'primary', arch: 'upper', left: 51.9, top: 42.9, size: 'sm' },
+  { value: '左上B', label: 'B', groupKey: 'UL-2', kind: 'primary', arch: 'upper', left: 58.0, top: 42.9, size: 'sm' },
+  { value: '左上C', label: 'C', groupKey: 'UL-3', kind: 'primary', arch: 'upper', left: 64.0, top: 42.9, size: 'sm' },
+  { value: '左上D', label: 'D', groupKey: 'UL-4', kind: 'primary', arch: 'upper', left: 70.0, top: 42.9, size: 'sm' },
+  { value: '左上E', label: 'E', groupKey: 'UL-5', kind: 'primary', arch: 'upper', left: 76.0, top: 42.9, size: 'sm' },
+  { value: '48', label: '8', groupKey: 'LR-8', kind: 'permanent', arch: 'lower', left: 3.3, top: 69.2, size: 'md' },
+  { value: '47', label: '7', groupKey: 'LR-7', kind: 'permanent', arch: 'lower', left: 9.3, top: 69.2, size: 'md' },
+  { value: '46', label: '6', groupKey: 'LR-6', kind: 'permanent', arch: 'lower', left: 15.3, top: 69.2, size: 'md' },
+  { value: '45', label: '5', groupKey: 'LR-5', kind: 'permanent', arch: 'lower', left: 21.3, top: 69.2, size: 'md' },
+  { value: '44', label: '4', groupKey: 'LR-4', kind: 'permanent', arch: 'lower', left: 27.3, top: 69.2, size: 'md' },
+  { value: '43', label: '3', groupKey: 'LR-3', kind: 'permanent', arch: 'lower', left: 33.3, top: 69.2, size: 'md' },
+  { value: '42', label: '2', groupKey: 'LR-2', kind: 'permanent', arch: 'lower', left: 39.4, top: 69.2, size: 'md' },
+  { value: '41', label: '1', groupKey: 'LR-1', kind: 'permanent', arch: 'lower', left: 45.4, top: 69.2, size: 'md' },
+  { value: '31', label: '1', groupKey: 'LL-1', kind: 'permanent', arch: 'lower', left: 51.9, top: 69.2, size: 'md' },
+  { value: '32', label: '2', groupKey: 'LL-2', kind: 'permanent', arch: 'lower', left: 58.0, top: 69.2, size: 'md' },
+  { value: '33', label: '3', groupKey: 'LL-3', kind: 'permanent', arch: 'lower', left: 64.0, top: 69.2, size: 'md' },
+  { value: '34', label: '4', groupKey: 'LL-4', kind: 'permanent', arch: 'lower', left: 70.0, top: 69.2, size: 'md' },
+  { value: '35', label: '5', groupKey: 'LL-5', kind: 'permanent', arch: 'lower', left: 76.0, top: 69.2, size: 'md' },
+  { value: '36', label: '6', groupKey: 'LL-6', kind: 'permanent', arch: 'lower', left: 82.0, top: 69.2, size: 'md' },
+  { value: '37', label: '7', groupKey: 'LL-7', kind: 'permanent', arch: 'lower', left: 88.0, top: 69.2, size: 'md' },
+  { value: '38', label: '8', groupKey: 'LL-8', kind: 'permanent', arch: 'lower', left: 94.1, top: 69.2, size: 'md' },
+  { value: '右下E', label: 'E', groupKey: 'LR-5', kind: 'primary', arch: 'lower', left: 21.3, top: 61.2, size: 'sm' },
+  { value: '右下D', label: 'D', groupKey: 'LR-4', kind: 'primary', arch: 'lower', left: 27.3, top: 61.2, size: 'sm' },
+  { value: '右下C', label: 'C', groupKey: 'LR-3', kind: 'primary', arch: 'lower', left: 33.3, top: 61.2, size: 'sm' },
+  { value: '右下B', label: 'B', groupKey: 'LR-2', kind: 'primary', arch: 'lower', left: 39.4, top: 61.2, size: 'sm' },
+  { value: '右下A', label: 'A', groupKey: 'LR-1', kind: 'primary', arch: 'lower', left: 45.4, top: 61.2, size: 'sm' },
+  { value: '左下A', label: 'A', groupKey: 'LL-1', kind: 'primary', arch: 'lower', left: 51.9, top: 61.2, size: 'sm' },
+  { value: '左下B', label: 'B', groupKey: 'LL-2', kind: 'primary', arch: 'lower', left: 58.0, top: 61.2, size: 'sm' },
+  { value: '左下C', label: 'C', groupKey: 'LL-3', kind: 'primary', arch: 'lower', left: 64.0, top: 61.2, size: 'sm' },
+  { value: '左下D', label: 'D', groupKey: 'LL-4', kind: 'primary', arch: 'lower', left: 70.0, top: 61.2, size: 'sm' },
+  { value: '左下E', label: 'E', groupKey: 'LL-5', kind: 'primary', arch: 'lower', left: 76.0, top: 61.2, size: 'sm' },
 ];
+
+const formatToothSelection = (value: string) => {
+  if (value === 'ALL') return '全口';
+  if (value === 'UPPER') return '上颌';
+  if (value === 'LOWER') return '下颌';
+  return value.split(',').filter(Boolean).join('、');
+};
 
 const ToothCrown = ({ tooth, selected }: { tooth: ToothPoint, selected: boolean }) => {
   const isMolar = tooth.type === 'molar';
@@ -986,7 +1020,6 @@ const ToothSelector = ({ value, onChange }: { value: string, onChange: (val: str
   const isDragging = useRef(false);
   const dragMode = useRef<'select' | 'deselect'>('select');
 
-  // Parsing currently selected teeth
   const selectedTeeth = useMemo(() => {
     if (value === 'ALL') return new Set(['ALL']);
     if (value === 'UPPER') return new Set(['UPPER']);
@@ -996,42 +1029,41 @@ const ToothSelector = ({ value, onChange }: { value: string, onChange: (val: str
 
   useEffect(() => {
     const handleUp = () => { isDragging.current = false; };
-    window.addEventListener('mouseup', handleUp);
-    return () => window.removeEventListener('mouseup', handleUp);
+    window.addEventListener('pointerup', handleUp);
+    return () => window.removeEventListener('pointerup', handleUp);
   }, []);
 
-  const updateSelection = (id: number, mode: 'select' | 'deselect') => {
-    const idStr = id.toString();
+  const updateSelection = (tooth: ToothImagePoint, mode: 'select' | 'deselect') => {
     const newSet = new Set(selectedTeeth);
     
-    // Clear special flags if selecting specific
     if (newSet.has('ALL') || newSet.has('UPPER') || newSet.has('LOWER')) {
       newSet.clear();
     }
 
     if (mode === 'select') {
-      newSet.add(idStr);
+      TOOTH_IMAGE_POINTS
+        .filter(point => point.groupKey === tooth.groupKey && point.value !== tooth.value)
+        .forEach(point => newSet.delete(point.value));
+      newSet.add(tooth.value);
     } else {
-      newSet.delete(idStr);
+      newSet.delete(tooth.value);
     }
     
     onChange(Array.from(newSet).join(','));
   };
 
-  const handleMouseDown = (id: number) => {
+  const handlePointerDown = (tooth: ToothImagePoint) => {
     isDragging.current = true;
-    const idStr = id.toString();
-    const isSelected = selectedTeeth.has(idStr);
+    const isSelected = selectedTeeth.has(tooth.value);
     
-    // If it's already selected, we are in deselect mode. If not, select mode.
     dragMode.current = isSelected ? 'deselect' : 'select';
     
-    updateSelection(id, dragMode.current);
+    updateSelection(tooth, dragMode.current);
   };
 
-  const handleMouseEnter = (id: number) => {
+  const handlePointerEnter = (tooth: ToothImagePoint) => {
     if (isDragging.current) {
-      updateSelection(id, dragMode.current);
+      updateSelection(tooth, dragMode.current);
     }
   };
 
@@ -1056,24 +1088,31 @@ const ToothSelector = ({ value, onChange }: { value: string, onChange: (val: str
             draggable={false}
           />
           {TOOTH_IMAGE_POINTS.map(tooth => {
-          const selected = selectedTeeth.has(tooth.id.toString()) || selectedTeeth.has('ALL') || (selectedTeeth.has('UPPER') && tooth.id < 30) || (selectedTeeth.has('LOWER') && tooth.id > 30);
+          const selected = selectedTeeth.has(tooth.value)
+            || (tooth.kind === 'permanent' && selectedTeeth.has('ALL'))
+            || (tooth.kind === 'permanent' && selectedTeeth.has('UPPER') && tooth.arch === 'upper')
+            || (tooth.kind === 'permanent' && selectedTeeth.has('LOWER') && tooth.arch === 'lower');
           return (
             <button
-              key={tooth.id}
+              key={tooth.value}
               type="button"
-              aria-label={`选择牙位 ${tooth.id}`}
-              title={`牙位 ${tooth.id}`}
+              aria-label={`选择牙位 ${tooth.value}`}
+              title={`牙位 ${tooth.value}`}
               style={{ left: `${tooth.left}%`, top: `${tooth.top}%` }}
-              className={`absolute h-9 w-9 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 text-sm font-bold transition-all ${
+              className={`absolute -translate-x-1/2 -translate-y-1/2 rounded-full border-2 font-bold transition-all ${
+                tooth.size === 'sm' ? 'h-7 w-7 text-xs' : 'h-9 w-9 text-sm'
+              } ${
                 selected
                   ? 'border-teal-700 bg-teal-500/80 text-white shadow-md'
-                  : 'border-transparent bg-white/0 text-transparent hover:border-teal-500 hover:bg-teal-100/70 hover:text-teal-900'
+                  : 'border-slate-300 bg-white/85 text-slate-900 shadow-sm hover:border-teal-500 hover:bg-teal-50 hover:text-teal-900'
               }`}
-              onMouseDown={() => handleMouseDown(tooth.id)}
-              onMouseEnter={() => handleMouseEnter(tooth.id)}
-              onTouchStart={() => handleMouseDown(tooth.id)}
+              onPointerDown={e => {
+                e.preventDefault();
+                handlePointerDown(tooth);
+              }}
+              onPointerEnter={() => handlePointerEnter(tooth)}
             >
-              {selected ? tooth.id : ''}
+              {tooth.label}
             </button>
           );
         })}
@@ -1083,10 +1122,10 @@ const ToothSelector = ({ value, onChange }: { value: string, onChange: (val: str
       <div className="mt-3 text-center min-h-8 max-w-full">
         {value ? (
            <div className="inline-flex max-w-full items-center gap-2 bg-teal-100 text-teal-800 px-4 py-1.5 rounded-full text-sm font-medium animate-in fade-in zoom-in duration-200 shadow-sm border border-teal-200">
-             <Check size={16} className="flex-shrink-0"/> <span className="flex-shrink-0">已选择:</span> <span className="font-mono font-bold truncate">{value}</span>
+             <Check size={16} className="flex-shrink-0"/> <span className="flex-shrink-0">已选择:</span> <span className="font-mono font-bold truncate">{formatToothSelection(value)}</span>
            </div>
         ) : (
-          <span className="text-slate-400 italic text-sm">请点击或拖动选择牙位</span>
+          <span aria-hidden="true">&nbsp;</span>
         )}
       </div>
     </div>
@@ -1118,6 +1157,9 @@ const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClose: () 
   const [backupSettings, setBackupSettings] = useState(clinicService.getBackupSettings());
   const [backupStatus, setBackupStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
   const [isSendingBackup, setIsSendingBackup] = useState(false);
+  const [releaseSettings, setReleaseSettings] = useState(clinicService.getReleaseSettings());
+  const [releaseStatus, setReleaseStatus] = useState<ReleaseCheckResult | null>(null);
+  const [isCheckingRelease, setIsCheckingRelease] = useState(false);
   
   // Catalog State
   const [catalog, setCatalog] = useState<TreatmentCategory[]>(clinicService.getCatalog());
@@ -1150,6 +1192,31 @@ const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClose: () 
     setBackupStatus({ type: result.success ? 'success' : 'error', message: result.message });
     setIsSendingBackup(false);
   };
+
+  const handleSaveReleaseSettings = () => {
+    clinicService.updateReleaseSettings(releaseSettings);
+    setReleaseStatus({
+      success: true,
+      updateAvailable: false,
+      currentVersion: APP_VERSION,
+      message: '更新接口配置已保存。'
+    });
+  };
+
+  const handleCheckRelease = async (settings = releaseSettings) => {
+    setIsCheckingRelease(true);
+    clinicService.updateReleaseSettings(settings);
+    const result = await clinicService.checkLatestRelease(settings);
+    setReleaseStatus(result);
+    setIsCheckingRelease(false);
+  };
+
+  useEffect(() => {
+    if (releaseSettings.autoCheck) {
+      handleCheckRelease(releaseSettings);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleExport = () => {
     const dataStr = clinicService.exportData();
@@ -1287,6 +1354,69 @@ const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClose: () 
             </h4>
             <p className="text-base text-slate-500 mb-6">将所有患者、预约和设置数据导出为JSON文件备份。</p>
             <Button onClick={handleExport} size="lg">导出 JSON</Button>
+          </div>
+
+          <div className="bg-slate-50 p-8 rounded-xl border border-slate-200">
+            <h4 className="font-bold text-slate-800 mb-2 flex items-center gap-2 text-lg">
+              <RefreshCw size={24} className="text-teal-600" /> 应用更新
+            </h4>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-slate-600 mb-2 font-medium">GitHub Release 接口</label>
+                <input
+                  className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none focus:ring-2 focus:ring-teal-500"
+                  value={releaseSettings.endpoint}
+                  onChange={e => {
+                    setReleaseSettings({ ...releaseSettings, endpoint: e.target.value });
+                    setReleaseStatus(null);
+                  }}
+                />
+              </div>
+              <label className="inline-flex items-center gap-3 text-slate-700 font-medium">
+                <input
+                  type="checkbox"
+                  className="h-5 w-5 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                  checked={releaseSettings.autoCheck}
+                  onChange={e => {
+                    const next = { ...releaseSettings, autoCheck: e.target.checked };
+                    setReleaseSettings(next);
+                    clinicService.updateReleaseSettings(next);
+                  }}
+                />
+                打开设置时自动检测
+              </label>
+              {releaseStatus && (
+                <div className={`rounded-lg border px-4 py-3 text-base ${
+                  releaseStatus.success
+                    ? releaseStatus.updateAvailable
+                      ? 'border-amber-200 bg-amber-50 text-amber-800'
+                      : 'border-teal-200 bg-teal-50 text-teal-800'
+                    : 'border-red-200 bg-red-50 text-red-700'
+                }`}>
+                  <div className="font-bold">{releaseStatus.message}</div>
+                  <div className="mt-1 text-sm opacity-80">
+                    当前 v{releaseStatus.currentVersion}
+                    {releaseStatus.latestVersion ? ` · 最新 v${releaseStatus.latestVersion}` : ''}
+                  </div>
+                  {releaseStatus.releaseUrl && (
+                    <a
+                      href={releaseStatus.releaseUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-3 inline-flex items-center gap-1 font-bold underline underline-offset-2"
+                    >
+                      打开 Release <ExternalLink size={15} />
+                    </a>
+                  )}
+                </div>
+              )}
+              <div className="flex flex-wrap gap-3">
+                <Button onClick={handleSaveReleaseSettings} variant="secondary" size="lg">保存更新接口</Button>
+                <Button onClick={() => handleCheckRelease()} size="lg" disabled={isCheckingRelease}>
+                  {isCheckingRelease ? '检测中...' : '立即检测更新'}
+                </Button>
+              </div>
+            </div>
           </div>
 
           <div className="bg-slate-50 p-8 rounded-xl border border-slate-200">
@@ -1639,8 +1769,7 @@ const AddTreatmentModal = ({ phone, onClose, onSuccess }: { phone: string, onClo
         <div className="flex flex-col min-w-0">
            <label className="block text-base font-bold text-slate-700 mb-4 flex flex-wrap items-center gap-2">
              <Smile size={20} className="text-teal-600"/>
-             选择牙位 
-             <span className="text-sm font-normal text-slate-400 ml-2">(支持拖动多选)</span>
+             选择牙位
            </label>
            <div className="flex-1 flex items-center justify-center bg-slate-50/50 rounded-2xl border-2 border-dashed border-slate-200 p-2 sm:p-4 min-w-0">
              <ToothSelector value={teeth} onChange={setTeeth} />
@@ -1789,8 +1918,7 @@ const EditTreatmentModal = ({ phone, record, onClose, onSuccess }: { phone: stri
         <div className="flex flex-col min-w-0">
            <label className="block text-base font-bold text-slate-700 mb-4 flex flex-wrap items-center gap-2">
              <Smile size={20} className="text-teal-600"/>
-             选择牙位 
-             <span className="text-sm font-normal text-slate-400 ml-2">(支持拖动多选)</span>
+             选择牙位
            </label>
            <div className="flex-1 flex items-center justify-center bg-slate-50/50 rounded-2xl border-2 border-dashed border-slate-200 p-2 sm:p-4 min-w-0">
              <ToothSelector value={teeth} onChange={setTeeth} />

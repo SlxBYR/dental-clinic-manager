@@ -62,6 +62,22 @@ export interface BackupSettings {
   token?: string;
 }
 
+export interface ReleaseSettings {
+  endpoint: string;
+  autoCheck: boolean;
+}
+
+export interface ReleaseCheckResult {
+  success: boolean;
+  updateAvailable: boolean;
+  currentVersion: string;
+  latestVersion?: string;
+  releaseName?: string;
+  releaseUrl?: string;
+  publishedAt?: string;
+  message: string;
+}
+
 export interface BackupPayload {
   app: 'DentalClinicManager';
   generatedAt: string;

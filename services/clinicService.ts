@@ -1,5 +1,5 @@
-import { ClinicData, Patient, GlobalAppointment, TreatmentCategory, TreatmentItem, AppointmentStatus, BackupSettings, BackupPayload } from '../types';
-import { STORAGE_KEY, BACKUP_SETTINGS_KEY, DEFAULT_CATALOG, DATA_VERSION } from '../constants';
+import { ClinicData, Patient, GlobalAppointment, TreatmentCategory, TreatmentItem, AppointmentStatus, BackupSettings, BackupPayload, ReleaseSettings, ReleaseCheckResult } from '../types';
+import { STORAGE_KEY, BACKUP_SETTINGS_KEY, RELEASE_SETTINGS_KEY, DEFAULT_CATALOG, DATA_VERSION, APP_VERSION, DEFAULT_RELEASE_API_URL } from '../constants';
 
 const normalizeName = (name: string) => name.trim().replace(/\s+/g, ' ').toLowerCase();
 const normalizePhone = (phone: string) => phone.trim().replace(/\s/g, '');
@@ -18,6 +18,19 @@ const hashPatientId = (name: string, phone: string) => {
     hash = Math.imul(hash, 16777619);
   }
   return `p_${(hash >>> 0).toString(16).padStart(8, '0')}`;
+};
+
+const normalizeVersion = (version: string) => version.trim().replace(/^v/i, '');
+
+const compareVersions = (a: string, b: string) => {
+  const left = normalizeVersion(a).split(/[.-]/).map(part => Number.parseInt(part, 10) || 0);
+  const right = normalizeVersion(b).split(/[.-]/).map(part => Number.parseInt(part, 10) || 0);
+  const length = Math.max(left.length, right.length);
+  for (let i = 0; i < length; i++) {
+    const diff = (left[i] || 0) - (right[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
 };
 
 const ensureUniqueId = (baseId: string, patients: Record<string, Patient>) => {
@@ -182,6 +195,107 @@ class ClinicService {
       endpoint: settings.endpoint.trim(),
       token: settings.token?.trim() || ''
     }));
+  }
+
+  getReleaseSettings(): ReleaseSettings {
+    const stored = localStorage.getItem(RELEASE_SETTINGS_KEY);
+    if (!stored) return { endpoint: DEFAULT_RELEASE_API_URL, autoCheck: true };
+    try {
+      const parsed = JSON.parse(stored);
+      return {
+        endpoint: typeof parsed.endpoint === 'string' && parsed.endpoint.trim() ? parsed.endpoint : DEFAULT_RELEASE_API_URL,
+        autoCheck: typeof parsed.autoCheck === 'boolean' ? parsed.autoCheck : true
+      };
+    } catch (e) {
+      console.error('Failed to parse release settings', e);
+      return { endpoint: DEFAULT_RELEASE_API_URL, autoCheck: true };
+    }
+  }
+
+  updateReleaseSettings(settings: ReleaseSettings) {
+    localStorage.setItem(RELEASE_SETTINGS_KEY, JSON.stringify({
+      endpoint: settings.endpoint.trim() || DEFAULT_RELEASE_API_URL,
+      autoCheck: settings.autoCheck
+    }));
+  }
+
+  async checkLatestRelease(settings: ReleaseSettings): Promise<ReleaseCheckResult> {
+    const endpoint = settings.endpoint.trim();
+    if (!endpoint) {
+      return {
+        success: false,
+        updateAvailable: false,
+        currentVersion: APP_VERSION,
+        message: '请先填写 GitHub Release 接口地址。'
+      };
+    }
+
+    let url: URL;
+    try {
+      url = new URL(endpoint);
+      if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Invalid protocol');
+    } catch {
+      return {
+        success: false,
+        updateAvailable: false,
+        currentVersion: APP_VERSION,
+        message: 'Release 接口地址格式不正确。'
+      };
+    }
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 12000);
+
+    try {
+      const response = await fetch(url.toString(), {
+        headers: { Accept: 'application/vnd.github+json' },
+        signal: controller.signal
+      });
+
+      if (!response.ok) {
+        return {
+          success: false,
+          updateAvailable: false,
+          currentVersion: APP_VERSION,
+          message: `GitHub 返回 ${response.status} ${response.statusText || ''}`.trim()
+        };
+      }
+
+      const release = await response.json();
+      const latestVersion = normalizeVersion(release?.tag_name || release?.name || '');
+      if (!latestVersion) {
+        return {
+          success: false,
+          updateAvailable: false,
+          currentVersion: APP_VERSION,
+          message: '未能从 Release 响应中读取版本号。'
+        };
+      }
+
+      const updateAvailable = compareVersions(latestVersion, APP_VERSION) > 0;
+      return {
+        success: true,
+        updateAvailable,
+        currentVersion: APP_VERSION,
+        latestVersion,
+        releaseName: release?.name || release?.tag_name,
+        releaseUrl: release?.html_url,
+        publishedAt: release?.published_at,
+        message: updateAvailable ? `发现新版本 v${latestVersion}` : '当前已是最新版本。'
+      };
+    } catch (e) {
+      const message = e instanceof DOMException && e.name === 'AbortError'
+        ? '检查超时，请稍后再试。'
+        : '检查失败，请确认网络、接口地址和 GitHub 访问。';
+      return {
+        success: false,
+        updateAvailable: false,
+        currentVersion: APP_VERSION,
+        message
+      };
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
   }
 
   async sendBackupToServer(settings: BackupSettings): Promise<{ success: boolean; message: string }> {
