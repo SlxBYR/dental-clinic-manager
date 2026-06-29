@@ -42,4 +42,4 @@ export const BACKUP_SETTINGS_KEY = 'dental_clinic_backup_settings_v1';
 export const RELEASE_SETTINGS_KEY = 'dental_clinic_release_settings_v1';
 export const DEFAULT_RELEASE_API_URL = 'https://api.github.com/repos/SlxBYR/dental-clinic-manager/releases/latest';
 export const DATA_VERSION = 3;
-export const APP_VERSION = '0.0.3';
+export const APP_VERSION = '1.1.1';

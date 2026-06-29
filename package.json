@@ -1,7 +1,7 @@
 {
   "name": "dental-clinic-manager",
   "private": true,
-  "version": "0.0.3",
+  "version": "1.1.1",
   "type": "module",
   "main": "electron-main.js",
   "scripts": {
