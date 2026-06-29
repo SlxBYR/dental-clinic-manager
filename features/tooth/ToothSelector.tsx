@@ -74,6 +74,16 @@ const formatToothSelection = (value: string) => {
   return value.split(',').filter(Boolean).join('、');
 };
 
+const getToothButtonStyle = (tooth: ToothImagePoint) => {
+  const isPrimary = tooth.size === 'sm';
+
+  return {
+    hitSize: isPrimary ? '4.1%' : '4.5%',
+    visualSize: isPrimary ? '78%' : '76%',
+    fontSize: isPrimary ? 'clamp(13px, 1.15vw, 20px)' : 'clamp(14px, 1.3vw, 23px)',
+  };
+};
+
 export const ToothSelector = ({ value, onChange }: { value: string, onChange: (val: string) => void }) => {
   const isDragging = useRef(false);
   const dragMode = useRef<'select' | 'deselect'>('select');
@@ -150,6 +160,7 @@ export const ToothSelector = ({ value, onChange }: { value: string, onChange: (v
               || (tooth.kind === 'permanent' && selectedTeeth.has('ALL'))
               || (tooth.kind === 'permanent' && selectedTeeth.has('UPPER') && tooth.arch === 'upper')
               || (tooth.kind === 'permanent' && selectedTeeth.has('LOWER') && tooth.arch === 'lower');
+            const buttonStyle = getToothButtonStyle(tooth);
 
             return (
               <button
@@ -160,22 +171,30 @@ export const ToothSelector = ({ value, onChange }: { value: string, onChange: (v
                 style={{
                   left: `${tooth.left}%`,
                   top: `${tooth.top}%`,
-                  width: tooth.size === 'sm' ? 36 : 44,
-                  height: tooth.size === 'sm' ? 36 : 44,
-                  fontSize: tooth.size === 'sm' ? 14 : 16,
+                  width: buttonStyle.hitSize,
+                  aspectRatio: '1 / 1',
                 }}
-                className={`absolute -translate-x-1/2 -translate-y-1/2 rounded-full border-2 font-bold transition-all ${
-                  selected
-                    ? 'border-teal-700 bg-teal-500/80 text-white shadow-md'
-                    : 'border-transparent bg-transparent text-transparent hover:border-teal-500 hover:bg-teal-100/60 hover:text-teal-900'
-                }`}
+                className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full bg-transparent"
                 onPointerDown={e => {
                   e.preventDefault();
                   handlePointerDown(tooth);
                 }}
                 onPointerEnter={() => handlePointerEnter(tooth)}
               >
-                {selected ? tooth.label : ''}
+                <span
+                  style={{
+                    width: buttonStyle.visualSize,
+                    aspectRatio: '1 / 1',
+                    fontSize: buttonStyle.fontSize,
+                  }}
+                  className={`absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 font-bold leading-none transition-all ${
+                    selected
+                      ? 'border-teal-700 bg-teal-500/75 text-white shadow-sm'
+                      : 'border-transparent bg-transparent text-transparent hover:border-teal-500/80 hover:bg-teal-100/50 hover:text-teal-900'
+                  }`}
+                >
+                  {selected ? tooth.label : ''}
+                </span>
               </button>
             );
           })}
