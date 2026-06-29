@@ -28,11 +28,6 @@ export const PatientDetail = ({ patient, onBack, onRefresh }: { patient: Patient
       setEditError('姓名是必填项');
       return;
     }
-    const existing = cleanPhone ? clinicService.findPatientByPhone(cleanPhone) : undefined;
-    if (existing && existing.id !== patient.id) {
-      setEditError(`该电话已属于患者 ${existing.name}`);
-      return;
-    }
     clinicService.updatePatient(patient.id, {
       name: cleanName,
       phone: cleanPhone,

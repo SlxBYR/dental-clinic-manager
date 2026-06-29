@@ -190,10 +190,10 @@ export const ToothSelector = ({ value, onChange }: { value: string, onChange: (v
                   className={`absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 font-bold leading-none transition-all ${
                     selected
                       ? 'border-teal-700 bg-teal-500/75 text-white shadow-sm'
-                      : 'border-transparent bg-transparent text-transparent hover:border-teal-500/80 hover:bg-teal-100/50 hover:text-teal-900'
+                      : 'border-emerald-200 bg-white/85 text-slate-700 shadow-sm hover:border-teal-500/80 hover:bg-teal-100/70 hover:text-teal-900'
                   }`}
                 >
-                  {selected ? tooth.label : ''}
+                  {tooth.label}
                 </span>
               </button>
             );

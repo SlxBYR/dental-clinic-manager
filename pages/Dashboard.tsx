@@ -1,12 +1,15 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Calendar, CheckCircle, Circle, Clock, Plus, Users } from 'lucide-react';
 import { clinicService } from '../services/clinicService';
 import { GlobalAppointment, Patient } from '../types';
 import { View } from '../appTypes';
 import { formatDateKey } from '../utils/date';
 import { buildTreatmentContributionDays, getContributionColor, TreatmentContribution } from '../features/contribution/contribution';
+import { Button } from '../components/Button';
+import { AddAppointmentModal } from '../modals/AddAppointmentModal';
 
 export const Dashboard = ({ patients, onViewChange, onPatientClick, onRefresh }: { patients: Patient[], onViewChange: (v: View) => void, onPatientClick: (id: string) => void, onRefresh: () => void }) => {
+  const [showAppointmentModal, setShowAppointmentModal] = useState(false);
   const today = formatDateKey(new Date());
   const todayAppts = clinicService.getAppointmentsByDate(today);
   const contribution = useMemo(() => buildTreatmentContributionDays(patients), [patients]);
@@ -60,8 +63,11 @@ export const Dashboard = ({ patients, onViewChange, onPatientClick, onRefresh }:
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-6">
         <h3 className="text-xl font-bold text-slate-800 mb-4">今日预约列表</h3>
         {todayAppts.length === 0 ? (
-          <div className="text-center py-8 text-slate-400 bg-slate-50 rounded-lg text-lg">
-            今日暂无预约
+          <div className="text-center py-8 bg-slate-50 rounded-lg text-lg">
+            <p className="text-slate-400">今日暂无预约</p>
+            <Button className="mt-5" size="lg" onClick={() => setShowAppointmentModal(true)}>
+              <Plus size={18} className="mr-2" /> 新建预约
+            </Button>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -100,6 +106,15 @@ export const Dashboard = ({ patients, onViewChange, onPatientClick, onRefresh }:
           </div>
         )}
       </div>
+
+      {showAppointmentModal && (
+        <AddAppointmentModal
+          patients={patients}
+          defaultDate={today}
+          onClose={() => setShowAppointmentModal(false)}
+          onSuccess={() => { setShowAppointmentModal(false); onRefresh(); }}
+        />
+      )}
     </div>
   );
 };

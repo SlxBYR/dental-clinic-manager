@@ -20,6 +20,11 @@ const hashPatientId = (name: string, phone: string) => {
   return `p_${(hash >>> 0).toString(16).padStart(8, '0')}`;
 };
 
+const getPatientGroupId = (phone: string) => {
+  const cleanPhone = normalizePhone(phone);
+  return cleanPhone ? `phone_${cleanPhone}` : undefined;
+};
+
 const normalizeVersion = (version: string) => version.trim().replace(/^v/i, '');
 
 const compareVersions = (a: string, b: string) => {
@@ -57,7 +62,8 @@ const migrateData = (raw: any): ClinicData => {
     appointments: {}
   };
 
-  const phoneToId = new Map<string, string>();
+  const phoneToIds = new Map<string, string[]>();
+  const legacyPatientIdMap = new Map<string, string>();
   const oldPatients = raw?.patients || {};
 
   Object.keys(oldPatients).forEach(oldKey => {
@@ -66,35 +72,24 @@ const migrateData = (raw: any): ClinicData => {
     const name = (oldPatient.name || '').trim();
     if (!name) return;
 
-    let id = phone ? phoneToId.get(phone) : undefined;
-    if (!id) {
-      id = oldPatient.id || hashPatientId(name, phone);
-      id = ensureUniqueId(id, data.patients);
-      if (phone) phoneToId.set(phone, id);
-      data.patients[id] = {
-        ...oldPatient,
-        id,
-        name,
-        phone,
-        gender: oldPatient.gender || '男',
-        age: oldPatient.age || '',
-        treatments: Array.isArray(oldPatient.treatments) ? oldPatient.treatments : [],
-        appointments: Array.isArray(oldPatient.appointments) ? oldPatient.appointments : []
-      };
-      return;
-    }
+    const id = ensureUniqueId(oldPatient.id || hashPatientId(name, phone), data.patients);
+    const patientGroupId = oldPatient.patientGroupId || getPatientGroupId(phone) || `patient_${id}`;
 
-    const target = data.patients[id];
-    target.treatments = [
-      ...target.treatments,
-      ...(Array.isArray(oldPatient.treatments) ? oldPatient.treatments : [])
-    ];
-    target.appointments = [
-      ...target.appointments,
-      ...(Array.isArray(oldPatient.appointments) ? oldPatient.appointments : [])
-    ];
-    if (!target.age && oldPatient.age) target.age = oldPatient.age;
-    if (!target.social && oldPatient.social) target.social = oldPatient.social;
+    data.patients[id] = {
+      ...oldPatient,
+      id,
+      patientGroupId,
+      name,
+      phone,
+      gender: oldPatient.gender || '男',
+      age: oldPatient.age || '',
+      treatments: Array.isArray(oldPatient.treatments) ? oldPatient.treatments : [],
+      appointments: Array.isArray(oldPatient.appointments) ? oldPatient.appointments : []
+    };
+
+    legacyPatientIdMap.set(oldKey, id);
+    if (oldPatient.id) legacyPatientIdMap.set(oldPatient.id, id);
+    if (phone) phoneToIds.set(phone, [...(phoneToIds.get(phone) || []), id]);
   });
 
   const oldAppointments = raw?.appointments || {};
@@ -102,7 +97,8 @@ const migrateData = (raw: any): ClinicData => {
     const migrated = (Array.isArray(oldAppointments[dateKey]) ? oldAppointments[dateKey] : [])
       .map((appt: any) => {
         const phone = normalizePhone(appt.phone || '');
-        const patientId = appt.patientId || (phone ? phoneToId.get(phone) : undefined);
+        const patientId = (appt.patientId ? legacyPatientIdMap.get(appt.patientId) || appt.patientId : undefined)
+          || (phone ? phoneToIds.get(phone)?.[0] : undefined);
         const patient = patientId ? data.patients[patientId] : undefined;
         if (!patientId || !patient) return null;
         return {
@@ -513,20 +509,12 @@ class ClinicService {
   addPatient(patient: Omit<Patient, 'id'>): { success: boolean; patientId: string; merged: boolean } {
     const cleanName = patient.name.trim();
     const cleanPhone = normalizePhone(patient.phone);
-    const existing = this.findPatientByPhone(cleanPhone);
-
-    if (existing) {
-      existing.name = existing.name || cleanName;
-      existing.gender = existing.gender || patient.gender;
-      existing.age = existing.age || patient.age;
-      this.saveData();
-      return { success: true, patientId: existing.id, merged: true };
-    }
 
     const id = ensureUniqueId(hashPatientId(cleanName, cleanPhone), this.data.patients);
     this.data.patients[id] = {
       ...patient,
       id,
+      patientGroupId: patient.patientGroupId || getPatientGroupId(cleanPhone) || `patient_${id}`,
       name: cleanName,
       phone: cleanPhone,
       treatments: patient.treatments || [],
@@ -541,7 +529,10 @@ class ClinicService {
     const cleanUpdates = {
       ...updates,
       ...(updates.name !== undefined ? { name: updates.name.trim() } : {}),
-      ...(updates.phone !== undefined ? { phone: normalizePhone(updates.phone) } : {})
+      ...(updates.phone !== undefined ? {
+        phone: normalizePhone(updates.phone),
+        patientGroupId: getPatientGroupId(updates.phone) || `patient_${patientId}`
+      } : {})
     };
     this.data.patients[patientId] = {
       ...this.data.patients[patientId],
@@ -556,6 +547,7 @@ class ClinicService {
     if (!this.data.patients[patientId]) return;
     delete this.data.patients[patientId];
     Object.keys(this.data.appointments).forEach(dateKey => {
+      // 预约以 patientId 关联；同号码患者可能是不同家属，不能按 phone 删除。
       this.data.appointments[dateKey] = this.data.appointments[dateKey].filter(appt => appt.patientId !== patientId);
       if (this.data.appointments[dateKey].length === 0) delete this.data.appointments[dateKey];
     });

@@ -10,6 +10,7 @@ export const AddPatientModal = ({ patients, onSelectPatient, onClose, onSuccess 
   const [form, setForm] = useState({ name: '', phone: '', gender: '男', age: '' });
   const [error, setError] = useState('');
   const nameQuery = form.name.trim().toLowerCase();
+  const phoneQuery = form.phone.trim();
 
   const similarPatients = useMemo(() => {
     if (!nameQuery) return [];
@@ -26,6 +27,11 @@ export const AddPatientModal = ({ patients, onSelectPatient, onClose, onSuccess 
       })
       .slice(0, 5);
   }, [patients, nameQuery]);
+
+  const samePhonePatients = useMemo(() => {
+    if (!phoneQuery) return [];
+    return patients.filter(patient => patient.phone === phoneQuery);
+  }, [patients, phoneQuery]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -45,7 +51,10 @@ export const AddPatientModal = ({ patients, onSelectPatient, onClose, onSuccess 
       appointments: []
     });
 
-    if (result.merged) alert('该电话号码已存在，已归并到同一个患者档案。');
+    if (!result.success) {
+      setError('保存患者失败');
+      return;
+    }
     onSuccess();
   };
 
@@ -82,6 +91,11 @@ export const AddPatientModal = ({ patients, onSelectPatient, onClose, onSuccess 
           <label className="block text-base font-bold text-slate-700 mb-2">电话 (可选)</label>
           <input className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg focus:ring-2 focus:ring-teal-500 outline-none"
             value={form.phone} onChange={e => setForm({...form, phone: e.target.value.replace(/\s/g, '')})} />
+          {samePhonePatients.length > 0 && (
+            <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              该电话已有 {samePhonePatients.length} 位患者，新档案会归入同号码患者组，并保留为独立患者。
+            </div>
+          )}
         </div>
         <div className="grid grid-cols-2 gap-6">
           <div>

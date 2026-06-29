@@ -28,6 +28,7 @@ export interface Appointment {
 
 export interface Patient {
   id: string; // Hidden unique ID
+  patientGroupId?: string; // 同号码患者组；同一电话可对应多个独立患者
   name: string;
   phone: string;
   gender: string;

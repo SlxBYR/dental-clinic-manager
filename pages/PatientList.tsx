@@ -48,6 +48,10 @@ export const PatientList = ({ patients, onSelect, onRefresh }: { patients: Patie
   };
 
   const filtered = patients.filter(p => isMatch(p, search));
+  const phoneCounts = patients.reduce<Record<string, number>>((counts, patient) => {
+    if (patient.phone) counts[patient.phone] = (counts[patient.phone] || 0) + 1;
+    return counts;
+  }, {});
 
   // Sort descending by last update
   filtered.sort((a, b) => getLastUpdate(b).localeCompare(getLastUpdate(a)));
@@ -97,7 +101,14 @@ export const PatientList = ({ patients, onSelect, onRefresh }: { patients: Patie
                     <div className="w-10 h-10 rounded-full bg-teal-100 text-teal-700 flex items-center justify-center font-bold text-lg">
                       {p.name.charAt(0)}
                     </div>
-                    {p.name}
+                    <div className="min-w-0">
+                      <div>{p.name}</div>
+                      {p.phone && phoneCounts[p.phone] > 1 && (
+                        <div className="mt-1 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
+                          同号码组 {phoneCounts[p.phone]} 人
+                        </div>
+                      )}
+                    </div>
                   </td>
                   <td className="px-6 py-4 text-slate-600">{p.phone || '未填写'}</td>
                   <td className="px-6 py-4 text-slate-600">{p.gender}, {p.age}岁</td>

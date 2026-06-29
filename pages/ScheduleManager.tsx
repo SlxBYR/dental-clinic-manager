@@ -1,13 +1,16 @@
 import React, { useMemo, useState } from 'react';
-import { CheckCircle, Circle } from 'lucide-react';
+import { CheckCircle, Circle, Plus } from 'lucide-react';
 import { clinicService } from '../services/clinicService';
 import { GlobalAppointment, Patient } from '../types';
 import { addDays, formatDateKey } from '../utils/date';
+import { Button } from '../components/Button';
+import { AddAppointmentModal } from '../modals/AddAppointmentModal';
 
 export const ScheduleManager = ({ patients, onRefresh, onPatientClick }: { patients: Patient[], onRefresh: () => void, onPatientClick: (id: string) => void }) => {
   const [mode, setMode] = useState<'daily' | 'range'>('daily');
   const [date, setDate] = useState(formatDateKey(new Date()));
   const [endDate, setEndDate] = useState(formatDateKey(addDays(new Date(), 7)));
+  const [showAppointmentModal, setShowAppointmentModal] = useState(false);
 
   const appointments = useMemo(() => {
     if (mode === 'daily') {
@@ -59,7 +62,10 @@ export const ScheduleManager = ({ patients, onRefresh, onPatientClick }: { patie
         </div>
         {appointments.length === 0 ? (
           <div className="p-16 text-center text-slate-400 text-lg">
-            该时间段内无预约记录
+            <p>该时间段内无预约记录</p>
+            <Button className="mt-5" size="lg" onClick={() => setShowAppointmentModal(true)}>
+              <Plus size={18} className="mr-2" /> 新建预约
+            </Button>
           </div>
         ) : (
           <table className="w-full text-left">
@@ -98,6 +104,15 @@ export const ScheduleManager = ({ patients, onRefresh, onPatientClick }: { patie
           </table>
         )}
       </div>
+
+      {showAppointmentModal && (
+        <AddAppointmentModal
+          patients={patients}
+          defaultDate={date}
+          onClose={() => setShowAppointmentModal(false)}
+          onSuccess={() => { setShowAppointmentModal(false); onRefresh(); }}
+        />
+      )}
     </div>
   );
 };

@@ -3,16 +3,33 @@ import { clinicService } from '../services/clinicService';
 import { Button } from '../components/Button';
 import { formatDateKey } from '../utils/date';
 import { ModalBase } from './ModalBase';
+import { Patient } from '../types';
 
-export const AddAppointmentModal = ({ phone, defaultName, onClose, onSuccess }: { phone: string, defaultName: string, onClose: () => void, onSuccess: () => void }) => {
-  const [date, setDate] = useState(formatDateKey(new Date()));
+export const AddAppointmentModal = ({
+  phone,
+  defaultName,
+  patients = [],
+  defaultDate,
+  onClose,
+  onSuccess
+}: {
+  phone?: string;
+  defaultName?: string;
+  patients?: Patient[];
+  defaultDate?: string;
+  onClose: () => void;
+  onSuccess: () => void;
+}) => {
+  const [selectedPatientId, setSelectedPatientId] = useState(phone || patients[0]?.id || '');
+  const [date, setDate] = useState(defaultDate || formatDateKey(new Date()));
   const [time, setTime] = useState('09:00');
+  const selectedPatient = selectedPatientId ? clinicService.getPatient(selectedPatientId) : undefined;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!date || !time) return;
+    if (!selectedPatientId || !date || !time) return;
 
-    clinicService.addAppointment(phone, date, time);
+    clinicService.addAppointment(selectedPatientId, date, time);
     onSuccess();
   };
 
@@ -21,7 +38,23 @@ export const AddAppointmentModal = ({ phone, defaultName, onClose, onSuccess }: 
       <form onSubmit={handleSubmit} className="space-y-6">
         <div>
            <label className="block text-base font-bold text-slate-700 mb-2">患者姓名</label>
-           <div className="text-lg text-slate-900 font-medium px-4 py-3 bg-slate-50 rounded-lg border border-slate-200">{defaultName}</div>
+           {phone ? (
+             <div className="text-lg text-slate-900 font-medium px-4 py-3 bg-slate-50 rounded-lg border border-slate-200">{defaultName || selectedPatient?.name || '未命名患者'}</div>
+           ) : patients.length > 0 ? (
+             <select
+               className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none bg-white h-[54px] focus:ring-2 focus:ring-teal-500"
+               value={selectedPatientId}
+               onChange={e => setSelectedPatientId(e.target.value)}
+             >
+               {patients.map(patient => (
+                 <option key={patient.id} value={patient.id}>
+                   {patient.name} {patient.phone ? `(${patient.phone})` : '(未填写电话)'}
+                 </option>
+               ))}
+             </select>
+           ) : (
+             <div className="text-lg text-slate-500 px-4 py-3 bg-slate-50 rounded-lg border border-slate-200">请先新增患者档案</div>
+           )}
         </div>
         <div>
            <label className="block text-base font-bold text-slate-700 mb-2">预约日期</label>
@@ -35,7 +68,7 @@ export const AddAppointmentModal = ({ phone, defaultName, onClose, onSuccess }: 
         </div>
         <div className="pt-4 flex justify-end gap-4">
            <Button type="button" variant="secondary" onClick={onClose} size="lg">取消</Button>
-           <Button type="submit" size="lg">确认预约</Button>
+           <Button type="submit" size="lg" disabled={!selectedPatientId}>确认预约</Button>
         </div>
       </form>
     </ModalBase>
