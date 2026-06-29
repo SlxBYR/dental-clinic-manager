@@ -1,7 +1,7 @@
 {
   "name": "dental-clinic-manager",
   "private": true,
-  "version": "1.1.11",
+  "version": "1.1.13",
   "type": "module",
   "main": "electron-main.js",
   "scripts": {
@@ -32,13 +32,13 @@
     "wait-on": "^9.0.3"
   },
   "build": {
-    "appId": "dental.clinic",
+    "appId": "com.dental.clinic",
     "productName": "DentalSystem",
     "nsis": {
       "oneClick": true,
       "allowToChangeInstallationDirectory": false,
       "deleteAppDataOnUninstall": false,
-      "runAfterFinish": true,
+      "runAfterFinish": false,
       "differentialPackage": false,
       "perMachine": false,
       "include": "build/installer.nsh"
