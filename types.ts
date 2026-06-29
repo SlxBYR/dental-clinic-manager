@@ -17,7 +17,7 @@ export interface TreatmentRecord {
   itemId?: string;
   item: string; // Name of the item
   price: number; // Charged price
-  teeth: string; // Selected teeth numbers or 'ALL', 'UPPER', etc.
+  teeth: string; // 可为空；也可为具体牙位、ALL、UPPER、LOWER 等。
   note: string;
 }
 

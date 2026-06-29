@@ -39,15 +39,11 @@ export const AddTreatmentModal = ({ phone, onClose, onSuccess }: { phone: string
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if(!teeth) {
-      alert("请选择牙位");
-      return;
-    }
     const cat = catalog.find(c => c.id === selectedCatId);
     const item = cat?.items.find(i => i.id === selectedItemId);
 
     if (item) {
-      clinicService.addTreatment(phone, item, price, teeth, note.trim(), selectedCatId);
+      clinicService.addTreatment(phone, item, price, teeth.trim(), note.trim(), selectedCatId);
       onSuccess();
     }
   };

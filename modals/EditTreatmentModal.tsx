@@ -12,7 +12,7 @@ export const EditTreatmentModal = ({ phone, record, onClose, onSuccess }: { phon
   const [selectedItemId, setSelectedItemId] = useState('');
 
   const [price, setPrice] = useState(record.price);
-  const [teeth, setTeeth] = useState(record.teeth);
+  const [teeth, setTeeth] = useState(record.teeth || '');
   const [note, setNote] = useState(record.note);
   const [initialLoad, setInitialLoad] = useState(true);
 
@@ -73,10 +73,6 @@ export const EditTreatmentModal = ({ phone, record, onClose, onSuccess }: { phon
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if(!teeth) {
-      alert("请选择牙位");
-      return;
-    }
     const cat = catalog.find(c => c.id === selectedCatId);
     const item = cat?.items.find(i => i.id === selectedItemId);
 
@@ -88,7 +84,7 @@ export const EditTreatmentModal = ({ phone, record, onClose, onSuccess }: { phon
       itemId: item?.id,
       item: itemName,
       price: price,
-      teeth: teeth,
+      teeth: teeth.trim(),
       note: note.trim()
     });
 

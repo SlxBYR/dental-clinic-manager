@@ -191,7 +191,7 @@ export const PatientDetail = ({ patient, onBack, onRefresh }: { patient: Patient
                          <h4 className="font-bold text-teal-700 text-xl">{t.item}</h4>
                          <div className="flex items-center gap-3 mt-3">
                             <span className="bg-orange-50 text-orange-700 px-3 py-1 rounded text-sm font-bold">¥ {t.price}</span>
-                            <span className="bg-blue-50 text-blue-700 px-3 py-1 rounded text-sm font-bold">牙位: {t.teeth}</span>
+                            <span className="bg-blue-50 text-blue-700 px-3 py-1 rounded text-sm font-bold">牙位: {t.teeth || '未指定'}</span>
                          </div>
                        </div>
                        <div className="flex gap-2">
