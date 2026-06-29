@@ -1,16 +1,21 @@
 import React, { useMemo, useState } from 'react';
-import { CheckCircle, Circle, Plus } from 'lucide-react';
+import { CheckCircle, Circle, Edit2, Plus, Trash2, XCircle } from 'lucide-react';
 import { clinicService } from '../services/clinicService';
 import { GlobalAppointment, Patient } from '../types';
 import { addDays, formatDateKey } from '../utils/date';
 import { Button } from '../components/Button';
 import { AddAppointmentModal } from '../modals/AddAppointmentModal';
+import { ConfirmationModal } from '../modals/ConfirmationModal';
+import { getAppointmentStatusClass, getAppointmentStatusLabel } from '../utils/statusStyles';
 
 export const ScheduleManager = ({ patients, onRefresh, onPatientClick }: { patients: Patient[], onRefresh: () => void, onPatientClick: (id: string) => void }) => {
   const [mode, setMode] = useState<'daily' | 'range'>('daily');
   const [date, setDate] = useState(formatDateKey(new Date()));
   const [endDate, setEndDate] = useState(formatDateKey(addDays(new Date(), 7)));
   const [showAppointmentModal, setShowAppointmentModal] = useState(false);
+  const [editingAppointment, setEditingAppointment] = useState<GlobalAppointment | null>(null);
+  const [deletingAppointment, setDeletingAppointment] = useState<GlobalAppointment | null>(null);
+  const [cancellingAppointment, setCancellingAppointment] = useState<GlobalAppointment | null>(null);
 
   const appointments = useMemo(() => {
     if (mode === 'daily') {
@@ -22,8 +27,23 @@ export const ScheduleManager = ({ patients, onRefresh, onPatientClick }: { patie
 
   const toggleStatus = (e: React.MouseEvent, appt: GlobalAppointment) => {
     e.stopPropagation();
+    if (appt.status === 'cancelled') return;
     const newStatus = appt.status === 'completed' ? 'pending' : 'completed';
-    clinicService.updateAppointmentStatus(appt.date, appt.patientId, appt.time, newStatus);
+    clinicService.updateAppointmentStatus(appt.id, newStatus);
+    onRefresh();
+  };
+
+  const confirmDeleteAppointment = () => {
+    if (!deletingAppointment) return;
+    clinicService.deleteAppointment(deletingAppointment.id);
+    setDeletingAppointment(null);
+    onRefresh();
+  };
+
+  const confirmCancelAppointment = () => {
+    if (!cancellingAppointment) return;
+    clinicService.cancelAppointment(cancellingAppointment.id);
+    setCancellingAppointment(null);
     onRefresh();
   };
 
@@ -76,27 +96,51 @@ export const ScheduleManager = ({ patients, onRefresh, onPatientClick }: { patie
                  <th className="px-8 py-4">姓名</th>
                  <th className="px-8 py-4">电话</th>
                  <th className="px-8 py-4">状态</th>
+                 <th className="px-8 py-4">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50 text-lg">
-              {appointments.map((appt, i) => (
-                <tr key={i} className="hover:bg-teal-50/30 cursor-pointer" onClick={() => onPatientClick(appt.patientId)}>
+              {appointments.map(appt => (
+                <tr key={appt.id} className="hover:bg-slate-50 cursor-pointer" onClick={() => onPatientClick(appt.patientId)}>
                   {mode === 'range' && <td className="px-8 py-5 font-mono text-slate-600">{appt.date}</td>}
-                  <td className="px-8 py-5 font-bold text-teal-700">{appt.time}</td>
+                  <td className="px-8 py-5 font-bold text-blue-700">{appt.time}</td>
                   <td className="px-8 py-5 text-slate-900 font-bold">{appt.name}</td>
                   <td className="px-8 py-5 text-slate-500">{appt.phone || '未填写'}</td>
                   <td className="px-8 py-5">
                        <button
                          onClick={(e) => toggleStatus(e, appt)}
-                         className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-medium transition-colors ${
-                           appt.status === 'completed'
-                             ? 'bg-slate-200 text-slate-600 hover:bg-slate-300'
-                             : 'bg-green-100 text-green-700 hover:bg-green-200'
-                         }`}
+                         disabled={appt.status === 'cancelled'}
+                         className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-medium transition-colors disabled:cursor-not-allowed ${getAppointmentStatusClass(appt.status)}`}
                        >
-                         {appt.status === 'completed' ? <CheckCircle size={14}/> : <Circle size={14}/>}
-                         {appt.status === 'completed' ? '完成' : '待诊'}
+                         {appt.status === 'completed' ? <CheckCircle size={14}/> : appt.status === 'cancelled' ? <XCircle size={14}/> : <Circle size={14}/>}
+                         {getAppointmentStatusLabel(appt.status)}
                        </button>
+                  </td>
+                  <td className="px-8 py-5">
+                    <div className="flex gap-2">
+                      <button
+                        onClick={e => { e.stopPropagation(); setEditingAppointment(appt); }}
+                        className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                        title="编辑预约"
+                      >
+                        <Edit2 size={18} />
+                      </button>
+                      <button
+                        onClick={e => { e.stopPropagation(); setCancellingAppointment(appt); }}
+                        disabled={appt.status === 'cancelled'}
+                        className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        title="取消预约"
+                      >
+                        <XCircle size={18} />
+                      </button>
+                      <button
+                        onClick={e => { e.stopPropagation(); setDeletingAppointment(appt); }}
+                        className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                        title="删除预约"
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -111,6 +155,35 @@ export const ScheduleManager = ({ patients, onRefresh, onPatientClick }: { patie
           defaultDate={date}
           onClose={() => setShowAppointmentModal(false)}
           onSuccess={() => { setShowAppointmentModal(false); onRefresh(); }}
+        />
+      )}
+
+      {editingAppointment && (
+        <AddAppointmentModal
+          patients={patients}
+          appointment={editingAppointment}
+          onClose={() => setEditingAppointment(null)}
+          onSuccess={() => { setEditingAppointment(null); onRefresh(); }}
+        />
+      )}
+
+      {cancellingAppointment && (
+        <ConfirmationModal
+          title="取消预约确认"
+          message={`将取消 ${cancellingAppointment.name} 在 ${cancellingAppointment.date} ${cancellingAppointment.time} 的预约。记录会保留在系统中，状态变为“已取消”。`}
+          confirmLabel="确认取消预约"
+          onConfirm={confirmCancelAppointment}
+          onCancel={() => setCancellingAppointment(null)}
+        />
+      )}
+
+      {deletingAppointment && (
+        <ConfirmationModal
+          title="删除预约确认"
+          message={`将永久删除 ${deletingAppointment.name} 在 ${deletingAppointment.date} ${deletingAppointment.time} 的预约记录，并从该患者预约历史中移除。此操作不可恢复。`}
+          confirmLabel="永久删除预约"
+          onConfirm={confirmDeleteAppointment}
+          onCancel={() => setDeletingAppointment(null)}
         />
       )}
     </div>

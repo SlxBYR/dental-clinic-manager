@@ -7,6 +7,7 @@ import { AddAppointmentModal } from '../modals/AddAppointmentModal';
 import { AddTreatmentModal } from '../modals/AddTreatmentModal';
 import { ConfirmationModal } from '../modals/ConfirmationModal';
 import { EditTreatmentModal } from '../modals/EditTreatmentModal';
+import { getAppointmentStatusClass, getAppointmentStatusLabel } from '../utils/statusStyles';
 
 export const PatientDetail = ({ patient, onBack, onRefresh }: { patient: Patient, onBack: () => void, onRefresh: () => void }) => {
   const [activeTab, setActiveTab] = useState<'info' | 'treatments' | 'appointments'>('info');
@@ -218,16 +219,22 @@ export const PatientDetail = ({ patient, onBack, onRefresh }: { patient: Patient
                  <tr>
                    <th className="px-8 py-4 font-bold text-slate-500 text-sm">预约时间</th>
                    <th className="px-8 py-4 font-bold text-slate-500 text-sm">创建时间</th>
+                   <th className="px-8 py-4 font-bold text-slate-500 text-sm">状态</th>
                  </tr>
                </thead>
                <tbody className="divide-y divide-slate-100">
                  {patient.appointments.length === 0 ? (
-                   <tr><td colSpan={2} className="px-8 py-10 text-center text-slate-400">无历史预约</td></tr>
+                   <tr><td colSpan={3} className="px-8 py-10 text-center text-slate-400">无历史预约</td></tr>
                  ) : (
                    patient.appointments.map((a, i) => (
-                     <tr key={i}>
+                     <tr key={a.id || i}>
                        <td className="px-8 py-5 font-bold text-slate-700">{a.datetime}</td>
                        <td className="px-8 py-5 text-slate-500 text-base">{a.created_at}</td>
+                       <td className="px-8 py-5">
+                         <span className={`inline-flex rounded-full px-3 py-1 text-sm font-medium ${getAppointmentStatusClass(a.status || 'pending')}`}>
+                           {getAppointmentStatusLabel(a.status || 'pending')}
+                         </span>
+                       </td>
                      </tr>
                    ))
                  )}
@@ -266,7 +273,8 @@ export const PatientDetail = ({ patient, onBack, onRefresh }: { patient: Patient
       {showDeleteConfirm && (
         <ConfirmationModal
            title="删除患者档案确认"
-           message={`您确定要删除患者 ${patient.name} 的所有档案吗？此操作包含所有治疗记录和预约历史，且不可恢复。`}
+           message={`将永久删除患者 ${patient.name} 的档案、所有处置记录、预约历史，并同步清理全局预约表中明确关联该患者的预约。此操作不可恢复，不会删除同号码其他患者的预约。`}
+           confirmLabel="永久删除患者"
            onConfirm={handleConfirmDelete}
            onCancel={() => setShowDeleteConfirm(false)}
         />
@@ -275,7 +283,8 @@ export const PatientDetail = ({ patient, onBack, onRefresh }: { patient: Patient
       {deleteTreatmentId && (
         <ConfirmationModal
           title="删除处置记录确认"
-          message="确定要删除这条处置记录吗？此操作不可恢复。"
+          message="将永久删除这条处置记录，包括项目、价格、牙位和备注信息。此操作不可恢复。"
+          confirmLabel="永久删除处置"
           onConfirm={confirmDeleteTreatment}
           onCancel={() => setDeleteTreatmentId(null)}
         />

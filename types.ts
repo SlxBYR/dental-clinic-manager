@@ -13,6 +13,7 @@ export interface TreatmentCategory {
 export interface TreatmentRecord {
   id: string;
   date: string;
+  createdAt?: string;
   categoryId?: string;
   itemId?: string;
   item: string; // Name of the item
@@ -22,8 +23,10 @@ export interface TreatmentRecord {
 }
 
 export interface Appointment {
+  id: string;
   datetime: string; // Format: YYYY-MM-DD HH:mm
   created_at: string;
+  status?: AppointmentStatus;
 }
 
 export interface Patient {
@@ -41,6 +44,7 @@ export interface Patient {
 export type AppointmentStatus = 'pending' | 'completed' | 'cancelled';
 
 export interface GlobalAppointment {
+  id: string;
   date: string; // YYYY-MM-DD
   time: string; // HH:mm
   patientId: string;
@@ -52,6 +56,7 @@ export interface GlobalAppointment {
 // Data structure for persistence
 export interface ClinicData {
   version?: number;
+  dataVersion?: number;
   clinicName?: string; // Customizable title
   patients: Record<string, Patient>;
   appointments: Record<string, GlobalAppointment[]>;

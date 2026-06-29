@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Calendar, CheckCircle, Circle, Clock, Plus, Users } from 'lucide-react';
+import { Calendar, CheckCircle, Circle, Clock, Plus, Users, XCircle } from 'lucide-react';
 import { clinicService } from '../services/clinicService';
 import { GlobalAppointment, Patient } from '../types';
 import { View } from '../appTypes';
@@ -7,6 +7,7 @@ import { formatDateKey } from '../utils/date';
 import { buildTreatmentContributionDays, getContributionColor, TreatmentContribution } from '../features/contribution/contribution';
 import { Button } from '../components/Button';
 import { AddAppointmentModal } from '../modals/AddAppointmentModal';
+import { getAppointmentStatusClass, getAppointmentStatusLabel } from '../utils/statusStyles';
 
 export const Dashboard = ({ patients, onViewChange, onPatientClick, onRefresh }: { patients: Patient[], onViewChange: (v: View) => void, onPatientClick: (id: string) => void, onRefresh: () => void }) => {
   const [showAppointmentModal, setShowAppointmentModal] = useState(false);
@@ -16,8 +17,9 @@ export const Dashboard = ({ patients, onViewChange, onPatientClick, onRefresh }:
 
   const toggleStatus = (e: React.MouseEvent, appt: GlobalAppointment) => {
     e.stopPropagation();
+    if (appt.status === 'cancelled') return;
     const newStatus = appt.status === 'completed' ? 'pending' : 'completed';
-    clinicService.updateAppointmentStatus(appt.date, appt.patientId, appt.time, newStatus);
+    clinicService.updateAppointmentStatus(appt.id, newStatus);
     onRefresh();
   };
 
@@ -81,22 +83,19 @@ export const Dashboard = ({ patients, onViewChange, onPatientClick, onRefresh }:
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50 text-base">
-                {todayAppts.map((appt, i) => (
-                  <tr key={i} className="group hover:bg-slate-50 cursor-pointer" onClick={() => onPatientClick(appt.patientId)}>
+                {todayAppts.map(appt => (
+                  <tr key={appt.id} className="group hover:bg-slate-50 cursor-pointer" onClick={() => onPatientClick(appt.patientId)}>
                     <td className="py-3 font-medium text-slate-700">{appt.time}</td>
                     <td className="py-3 text-slate-900 font-bold hover:text-teal-600">{appt.name}</td>
                     <td className="py-3 text-slate-500">{appt.phone || '未填写'}</td>
                     <td className="py-3">
                        <button
                          onClick={(e) => toggleStatus(e, appt)}
-                         className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-medium transition-colors ${
-                           appt.status === 'completed'
-                             ? 'bg-slate-200 text-slate-600 hover:bg-slate-300'
-                             : 'bg-green-100 text-green-700 hover:bg-green-200'
-                         }`}
+                         disabled={appt.status === 'cancelled'}
+                         className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-medium transition-colors disabled:cursor-not-allowed ${getAppointmentStatusClass(appt.status)}`}
                        >
-                         {appt.status === 'completed' ? <CheckCircle size={14}/> : <Circle size={14}/>}
-                         {appt.status === 'completed' ? '完成' : '待诊'}
+                         {appt.status === 'completed' ? <CheckCircle size={14}/> : appt.status === 'cancelled' ? <XCircle size={14}/> : <Circle size={14}/>}
+                         {getAppointmentStatusLabel(appt.status)}
                        </button>
                     </td>
                   </tr>

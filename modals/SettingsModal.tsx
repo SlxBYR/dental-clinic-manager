@@ -5,6 +5,8 @@ import { clinicService } from '../services/clinicService';
 import { CloudSyncResult, ReleaseCheckResult, TreatmentCategory, TreatmentItem } from '../types';
 import { Button } from '../components/Button';
 import { ModalBase } from './ModalBase';
+import { ConfirmationModal } from './ConfirmationModal';
+import { getErrorStatusClass, getSuccessStatusClass } from '../utils/statusStyles';
 
 export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClose: () => void, onRefresh: () => void, currentClinicName: string }) => {
   const [tab, setTab] = useState<'data' | 'catalog'>('data');
@@ -20,6 +22,8 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
   const [releaseSettings, setReleaseSettings] = useState(clinicService.getReleaseSettings());
   const [releaseStatus, setReleaseStatus] = useState<ReleaseCheckResult | null>(null);
   const [isCheckingRelease, setIsCheckingRelease] = useState(false);
+  const [pendingImportContent, setPendingImportContent] = useState<string | null>(null);
+  const [importStatus, setImportStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // 处置目录直接影响新增处置时的默认价格。
   const [catalog, setCatalog] = useState<TreatmentCategory[]>(clinicService.getCatalog());
@@ -120,17 +124,20 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
       fileReader.readAsText(e.target.files[0], "UTF-8");
       fileReader.onload = (event) => {
         if (event.target?.result) {
-          const success = clinicService.importData(event.target.result as string);
-          if (success) {
-            alert("导入成功！");
-            onRefresh();
-            onClose();
-          } else {
-            alert("导入失败，文件格式可能有误。");
-          }
+          setImportStatus(null);
+          setPendingImportContent(event.target.result as string);
         }
       };
     }
+    e.target.value = '';
+  };
+
+  const confirmImport = () => {
+    if (!pendingImportContent) return;
+    const result = clinicService.importData(pendingImportContent);
+    setPendingImportContent(null);
+    setImportStatus({ type: result.success ? 'success' : 'error', message: result.message });
+    if (result.success) onRefresh();
   };
 
   // 目录维护逻辑：先在弹窗本地编辑，点击保存后统一写入本地数据。
@@ -410,6 +417,13 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
               <Upload size={24} className="text-blue-600" /> 导入数据
             </h4>
             <p className="text-base text-slate-500 mb-6">从备份的JSON文件中恢复数据 (会覆盖当前数据)。</p>
+            {importStatus && (
+              <div className={`mb-4 rounded-lg border px-4 py-3 text-base ${
+                importStatus.type === 'success' ? getSuccessStatusClass() : getErrorStatusClass()
+              }`}>
+                {importStatus.message}
+              </div>
+            )}
             <input
               type="file"
               accept=".json"
@@ -496,6 +510,16 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
             ))}
           </div>
         </div>
+      )}
+
+      {pendingImportContent && (
+        <ConfirmationModal
+          title="覆盖导入数据确认"
+          message="导入会先校验并迁移文件中的患者、处置和预约数据；校验通过后将覆盖当前本机数据。系统会在本机保留一份导入前备份，但覆盖后的数据不能通过普通撤销恢复。"
+          confirmLabel="确认覆盖导入"
+          onConfirm={confirmImport}
+          onCancel={() => setPendingImportContent(null)}
+        />
       )}
     </ModalBase>
   );
