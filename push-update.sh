@@ -18,7 +18,7 @@ if ! git remote get-url "$REMOTE" >/dev/null 2>&1; then
   exit 1
 fi
 
-git add -A -- . ':!release' ':!dist' ':!node_modules'
+git add -A -- . ':!release'
 
 if git diff --cached --quiet; then
   echo "没有需要提交的更新。"
