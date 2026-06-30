@@ -28,10 +28,12 @@ const getPatientGroupId = (phone: string) => {
 
 const sanitizeIdPart = (value: string) => value.replace(/[^a-zA-Z0-9_-]/g, '');
 
+// 预约 id 必须跨日期唯一，后续编辑、删除、取消都依赖它定位同一条记录。
 export const createAppointmentId = (date: string, time: string, patientId: string, suffix = Date.now().toString(36)) => (
   `appt_${sanitizeIdPart(date)}_${sanitizeIdPart(time)}_${sanitizeIdPart(patientId)}_${suffix}`
 );
 
+// 旧数据可能没有状态或状态值不规范，迁移时统一收敛为当前三种状态。
 export const normalizeAppointmentStatus = (status: unknown): AppointmentStatus => {
   if (status === 'completed' || status === 'cancelled' || status === 'pending') return status;
   return 'pending';
@@ -67,6 +69,7 @@ const normalizeTreatmentChangeLog = (log: any, treatmentId: string, index: numbe
 const normalizeTreatment = (record: any, index: number): TreatmentRecord => {
   const id = typeof record?.id === 'string' && record.id.trim() ? record.id : `treatment_${Date.now()}_${index}`;
 
+  // 处置记录迁移只补齐缺失字段，不推断旧版本没有保存过的业务信息。
   return {
     id,
     date: typeof record?.date === 'string' && record.date.trim() ? record.date : new Date().toISOString().slice(0, 10),
@@ -90,6 +93,7 @@ const makePatientAppointment = (appt: GlobalAppointment, createdAt?: string): Ap
   status: appt.status
 });
 
+// 把各历史版本的数据统一迁到当前 ClinicData 结构，供启动、导入、云同步共用。
 export const migrateClinicData = (raw: any): ClinicData => {
   const data: ClinicData = {
     version: DATA_VERSION,
@@ -105,6 +109,7 @@ export const migrateClinicData = (raw: any): ClinicData => {
   const legacyAppointmentsByPatientId = new Map<string, any[]>();
   const oldPatients = raw?.patients && typeof raw.patients === 'object' ? raw.patients : {};
 
+  // 患者以独立 id 为主键；同手机号只进入同一 patientGroupId，不再合并成同一个人。
   Object.keys(oldPatients).forEach(oldKey => {
     const oldPatient = oldPatients[oldKey] || {};
     const phone = normalizePhone(oldPatient.phone || oldKey || '');
@@ -135,6 +140,7 @@ export const migrateClinicData = (raw: any): ClinicData => {
   const usedAppointmentIds = new Set<string>();
   const oldAppointments = raw?.appointments && typeof raw.appointments === 'object' ? raw.appointments : {};
 
+  // 全局预约表是当前事实来源，患者内的 appointments 只作为详情页历史快照。
   Object.keys(oldAppointments).forEach(dateKey => {
     const migrated = (Array.isArray(oldAppointments[dateKey]) ? oldAppointments[dateKey] : [])
       .map((appt: any, index: number) => {
@@ -189,6 +195,7 @@ export const migrateClinicData = (raw: any): ClinicData => {
     patient.appointments.push(makePatientAppointment(appt, oldSnapshot?.created_at));
   });
 
+  // 保留旧患者档案里仅存在于快照中的预约历史，避免迁移时丢失可追溯信息。
   Object.values(data.patients).forEach(patient => {
     const snapshotsById = new Map(patient.appointments.map(appt => [appt.id, appt]));
     const legacySnapshots = legacyAppointmentsByPatientId.get(patient.id) || [];
@@ -212,6 +219,7 @@ export const migrateClinicData = (raw: any): ClinicData => {
   return data;
 };
 
+// 导入、恢复和云同步写入前必须先校验，避免坏数据覆盖本机可用数据。
 export const validateClinicData = (data: ClinicData): { valid: true } | { valid: false; message: string } => {
   if (!data || typeof data !== 'object') return { valid: false, message: '导入数据不是有效对象。' };
   if (!data.patients || typeof data.patients !== 'object' || Array.isArray(data.patients)) {

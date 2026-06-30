@@ -47,6 +47,7 @@ export const PatientDetail = ({ patient, onBack, onRefresh }: { patient: Patient
   };
 
   const handleConfirmDelete = () => {
+    // 删除患者时由服务层按 patientId 精确清理预约，避免误删同手机号家属预约。
     clinicService.deletePatient(patient.id);
     onRefresh();
     onBack();
@@ -58,6 +59,7 @@ export const PatientDetail = ({ patient, onBack, onRefresh }: { patient: Patient
 
   const confirmDeleteTreatment = () => {
     if (deleteTreatmentId) {
+      // 处置记录删除是永久操作，入口前置了独立确认弹窗。
       clinicService.deleteTreatment(patient.id, deleteTreatmentId);
       setDeleteTreatmentId(null);
       onRefresh();

@@ -17,6 +17,7 @@ export const ScheduleManager = ({ patients, onRefresh, onPatientClick }: { patie
   const [deletingAppointment, setDeletingAppointment] = useState<GlobalAppointment | null>(null);
   const [cancellingAppointment, setCancellingAppointment] = useState<GlobalAppointment | null>(null);
 
+  // 列表只从 clinicService 读取当前事实数据；patients 变化时触发重新计算，确保外部刷新后页面同步。
   const appointments = useMemo(() => {
     if (mode === 'daily') {
       return clinicService.getAppointmentsByDate(date);
@@ -27,6 +28,7 @@ export const ScheduleManager = ({ patients, onRefresh, onPatientClick }: { patie
 
   const toggleStatus = (e: React.MouseEvent, appt: GlobalAppointment) => {
     e.stopPropagation();
+    // 已取消预约保留历史，不允许再切回待诊或完成。
     if (appt.status === 'cancelled') return;
     const newStatus = appt.status === 'completed' ? 'pending' : 'completed';
     clinicService.updateAppointmentStatus(appt.id, newStatus);

@@ -21,9 +21,13 @@ export default function App() {
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
-    setPatients(clinicService.getAllPatients());
     setClinicName(clinicService.getClinicName());
-  }, [refreshKey]);
+    if (currentView === 'patients') {
+      setPatients([]);
+      return;
+    }
+    setPatients(clinicService.getAllPatients());
+  }, [refreshKey, currentView]);
 
   const refreshData = () => {
     setRefreshKey(prev => prev + 1);

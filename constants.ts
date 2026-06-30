@@ -1,6 +1,6 @@
 import { TreatmentCategory } from './types';
 
-// Default catalog if none exists in storage
+// 首次启动或导入数据缺少目录时使用的默认处置项目目录。
 export const DEFAULT_CATALOG: TreatmentCategory[] = [
   {
     id: "cat_root_canal",
@@ -42,5 +42,7 @@ export const BACKUP_SETTINGS_KEY = 'dental_clinic_backup_settings_v1';
 export const CLOUD_SYNC_SETTINGS_KEY = 'dental_clinic_cloud_sync_settings_v1';
 export const RELEASE_SETTINGS_KEY = 'dental_clinic_release_settings_v1';
 export const DEFAULT_RELEASE_API_URL = 'https://api.github.com/repos/SlxBYR/dental-clinic-manager/releases/latest';
+// DATA_VERSION 只在 ClinicData 结构变化并需要迁移时递增。
 export const DATA_VERSION = 5;
-export const APP_VERSION = '1.1.17';
+// APP_VERSION 用于界面展示、Release 检测和安装包版本同步。
+export const APP_VERSION = '1.2.5';

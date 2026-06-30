@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Check, Download, Edit2, ExternalLink, Plus, RefreshCw, Save, Settings, Trash2, Upload, X } from 'lucide-react';
 import { APP_VERSION } from '../constants';
 import { clinicService } from '../services/clinicService';
-import { CloudSyncResult, ReleaseCheckResult, TreatmentCategory, TreatmentItem } from '../types';
+import { CloudSyncResult, ImportPreview, ReleaseCheckResult, TreatmentCategory, TreatmentItem } from '../types';
 import { Button } from '../components/Button';
 import { ModalBase } from './ModalBase';
 import { ConfirmationModal } from './ConfirmationModal';
@@ -23,6 +23,7 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
   const [releaseStatus, setReleaseStatus] = useState<ReleaseCheckResult | null>(null);
   const [isCheckingRelease, setIsCheckingRelease] = useState(false);
   const [pendingImportContent, setPendingImportContent] = useState<string | null>(null);
+  const [pendingImportPreview, setPendingImportPreview] = useState<ImportPreview | null>(null);
   const [showRestoreConfirm, setShowRestoreConfirm] = useState(false);
   const [importStatus, setImportStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [hasPreImportBackup, setHasPreImportBackup] = useState(clinicService.hasPreImportBackup());
@@ -128,7 +129,17 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
       fileReader.onload = (event) => {
         if (event.target?.result) {
           setImportStatus(null);
-          setPendingImportContent(event.target.result as string);
+          const content = event.target.result as string;
+          const result = clinicService.createImportPreview(content);
+          if (!result.success || !result.preview) {
+            setPendingImportContent(null);
+            setPendingImportPreview(null);
+            setImportStatus({ type: 'error', message: result.message });
+            return;
+          }
+          setPendingImportContent(content);
+          setPendingImportPreview(result.preview);
+          setImportStatus({ type: 'success', message: result.message });
         }
       };
     }
@@ -139,11 +150,17 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
     if (!pendingImportContent) return;
     const result = await clinicService.importData(pendingImportContent);
     setPendingImportContent(null);
+    setPendingImportPreview(null);
     setImportStatus({ type: result.success ? 'success' : 'error', message: result.message });
     if (result.success) {
       setHasPreImportBackup(clinicService.hasPreImportBackup());
       onRefresh();
     }
+  };
+
+  const cancelImportPreview = () => {
+    setPendingImportContent(null);
+    setPendingImportPreview(null);
   };
 
   const confirmRestorePreImportBackup = async () => {
@@ -542,14 +559,86 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
         </div>
       )}
 
-      {pendingImportContent && (
-        <ConfirmationModal
-          title="覆盖导入数据确认"
-          message="导入会先校验并迁移文件中的患者、处置和预约数据；校验通过后将覆盖当前本机数据。系统会在本机保留一份导入前备份，但覆盖后的数据不能通过普通撤销恢复。"
-          confirmLabel="确认覆盖导入"
-          onConfirm={confirmImport}
-          onCancel={() => setPendingImportContent(null)}
-        />
+      {pendingImportContent && pendingImportPreview && (
+        <ModalBase title="导入预览" onClose={cancelImportPreview} size="lg">
+          <div className="space-y-6">
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-5 py-4 text-amber-900">
+              <div className="font-bold text-lg">确认后将覆盖当前本机数据</div>
+              <div className="mt-1 text-sm leading-6">
+                导入文件已完成迁移和结构校验。系统会在写入前保存导入前备份，但覆盖后的数据不能通过普通撤销恢复。
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                <div className="text-sm text-slate-500">当前诊所</div>
+                <div className="mt-1 font-bold text-slate-800">{pendingImportPreview.currentClinicName}</div>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                <div className="text-sm text-slate-500">导入后诊所</div>
+                <div className="mt-1 font-bold text-slate-800">{pendingImportPreview.incomingClinicName}</div>
+              </div>
+            </div>
+
+            <div className="overflow-hidden rounded-lg border border-slate-200">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-50 text-slate-500">
+                  <tr>
+                    <th className="px-4 py-3">数据项</th>
+                    <th className="px-4 py-3">当前</th>
+                    <th className="px-4 py-3">导入后</th>
+                    <th className="px-4 py-3 text-teal-700">新增</th>
+                    <th className="px-4 py-3 text-amber-700">覆盖</th>
+                    <th className="px-4 py-3 text-red-700">移除</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {pendingImportPreview.metrics.map(metric => (
+                    <tr key={metric.label}>
+                      <td className="px-4 py-3 font-medium text-slate-800">{metric.label}</td>
+                      <td className="px-4 py-3 font-mono text-slate-600">{metric.current}</td>
+                      <td className="px-4 py-3 font-mono text-slate-600">{metric.incoming}</td>
+                      <td className="px-4 py-3 font-mono text-teal-700">{metric.added}</td>
+                      <td className="px-4 py-3 font-mono text-amber-700">{metric.overwritten}</td>
+                      <td className="px-4 py-3 font-mono text-red-700">{metric.removed}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {[
+                { title: '新增患者示例', items: pendingImportPreview.samples.addedPatients },
+                { title: '覆盖患者示例', items: pendingImportPreview.samples.overwrittenPatients },
+                { title: '移除患者示例', items: pendingImportPreview.samples.removedPatients }
+              ].map(group => (
+                <div key={group.title} className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                  <div className="font-bold text-slate-700">{group.title}</div>
+                  {group.items.length > 0 ? (
+                    <ul className="mt-2 space-y-1 text-sm text-slate-600">
+                      {group.items.map(item => <li key={item} className="truncate">{item}</li>)}
+                    </ul>
+                  ) : (
+                    <div className="mt-2 text-sm text-slate-400">无</div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-white px-4 py-3">
+              <div className="font-bold text-slate-700">风险提示</div>
+              <ul className="mt-2 space-y-1 text-sm text-slate-600">
+                {pendingImportPreview.warnings.map(warning => <li key={warning}>{warning}</li>)}
+              </ul>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <Button variant="secondary" onClick={cancelImportPreview} size="lg">取消</Button>
+              <Button variant="danger" onClick={confirmImport} size="lg">确认覆盖导入</Button>
+            </div>
+          </div>
+        </ModalBase>
       )}
 
       {showRestoreConfirm && (

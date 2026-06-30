@@ -1,3 +1,5 @@
+import { PatientListPage, PatientListQuery } from '../../types';
+
 export const CLINIC_DATA_STORE_KEY = 'clinicData';
 
 export type StorageReadResult = {
@@ -28,6 +30,7 @@ export interface ElectronSqliteStoreBridge {
   get(key: string): Promise<StorageReadResult>;
   set(key: string, value: string): Promise<StorageWriteResult>;
   status(): Promise<StorageStatusResult>;
+  listPatients(query: PatientListQuery): Promise<PatientListPage & { success: boolean; error?: string }>;
 }
 
 declare global {
@@ -35,4 +38,3 @@ declare global {
     electronSqliteStore?: ElectronSqliteStoreBridge;
   }
 }
-

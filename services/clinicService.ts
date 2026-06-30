@@ -1,9 +1,11 @@
-import { ClinicData, Patient, GlobalAppointment, TreatmentCategory, TreatmentItem, AppointmentStatus, BackupSettings, BackupPayload, ReleaseSettings, ReleaseCheckResult, CloudSyncSettings, CloudSyncResult, TreatmentRecord } from '../types';
+import { ClinicData, Patient, GlobalAppointment, TreatmentCategory, TreatmentItem, AppointmentStatus, BackupSettings, BackupPayload, ReleaseSettings, ReleaseCheckResult, CloudSyncSettings, CloudSyncResult, TreatmentRecord, ImportPreview, ImportPreviewMetric, ImportPreviewResult, PatientListItem, PatientListPage, PatientListQuery } from '../types';
 import { STORAGE_KEY, BACKUP_SETTINGS_KEY, CLOUD_SYNC_SETTINGS_KEY, RELEASE_SETTINGS_KEY, DEFAULT_CATALOG, DATA_VERSION, APP_VERSION, DEFAULT_RELEASE_API_URL } from '../constants';
 import { createAppointmentId, migrateClinicData, validateClinicData } from './dataMigrations';
 import { ElectronSqliteStore } from './storage/electronSqliteStore';
 import { LocalStorageStore } from './storage/localStorageStore';
 import { CLINIC_DATA_STORE_KEY, KeyValueStore } from './storage/types';
+// @ts-ignore tiny-pinyin 没有完整类型声明，浏览器兜底搜索需要运行时能力。
+import * as pinyin from 'tiny-pinyin';
 
 const normalizeName = (name: string) => name.trim().replace(/\s+/g, ' ').toLowerCase();
 const normalizePhone = (phone: string) => phone.trim().replace(/\s/g, '');
@@ -72,6 +74,7 @@ const createEmptyData = (): ClinicData => ({
   clinicName: 'DentalClinic'
 });
 
+// 所有外部 JSON 入口统一走迁移和校验，避免导入、恢复、云同步各自处理出差异。
 const parseAndValidateClinicData = (rawJson: string): ClinicData => {
   const parsed = JSON.parse(rawJson);
   const migrated = migrateClinicData(parsed);
@@ -80,10 +83,82 @@ const parseAndValidateClinicData = (rawJson: string): ClinicData => {
   return migrated;
 };
 
+const flattenAppointments = (data: ClinicData) => Object.values(data.appointments).flat();
+
+const countTreatments = (data: ClinicData) => Object.values(data.patients)
+  .reduce((total, patient) => total + patient.treatments.length, 0);
+
+const countCatalogItems = (data: ClinicData) => data.catalog
+  .reduce((total, category) => total + category.items.length, 0);
+
+const patientLabel = (patient?: Patient) => {
+  if (!patient) return '';
+  return `${patient.name}${patient.phone ? ` (${patient.phone})` : ''}`;
+};
+
+const getPatientLastUpdate = (patient: Patient) => {
+  let last = '0000-00-00';
+  patient.treatments.forEach(treatment => {
+    if (treatment.date > last) last = treatment.date;
+  });
+  patient.appointments.forEach(appointment => {
+    const date = appointment.datetime.split(' ')[0];
+    if (date > last) last = date;
+  });
+  return last;
+};
+
+const getPatientPinyinTerms = (name: string) => {
+  if (!pinyin || typeof pinyin.convertToPinyin !== 'function') return '';
+  try {
+    const fullPinyin = pinyin.convertToPinyin(name, ' ', true);
+    const parts = fullPinyin.split(/\s+/).filter(Boolean);
+    return `${fullPinyin} ${parts.join('')} ${parts.map((part: string) => part[0]).join('')}`.toLowerCase();
+  } catch {
+    return '';
+  }
+};
+
+const createDiffMetric = <T>(
+  label: string,
+  currentItems: T[],
+  incomingItems: T[],
+  getId: (item: T) => string
+): ImportPreviewMetric => {
+  const currentMap = new Map(currentItems.map(item => [getId(item), item]));
+  const incomingMap = new Map(incomingItems.map(item => [getId(item), item]));
+  let added = 0;
+  let overwritten = 0;
+  let removed = 0;
+
+  incomingMap.forEach((incoming, id) => {
+    const current = currentMap.get(id);
+    if (!current) {
+      added += 1;
+      return;
+    }
+    if (JSON.stringify(current) !== JSON.stringify(incoming)) overwritten += 1;
+  });
+
+  currentMap.forEach((_, id) => {
+    if (!incomingMap.has(id)) removed += 1;
+  });
+
+  return {
+    label,
+    current: currentItems.length,
+    incoming: incomingItems.length,
+    added,
+    overwritten,
+    removed
+  };
+};
+
 class ClinicService {
   private data: ClinicData = createEmptyData();
   private store: KeyValueStore = new LocalStorageStore();
   private localStore = new LocalStorageStore();
+  private sqliteStore: ElectronSqliteStore | null = null;
   private initialized = false;
   private initPromise: Promise<void> | null = null;
   private storageStatus = {
@@ -91,6 +166,7 @@ class ClinicService {
     message: '正在初始化本地存储。'
   };
 
+  // 初始化优先使用 Electron 暴露的 SQLite；失败时保留 localStorage 兜底，保证浏览器预览也能运行。
   initialize(): Promise<void> {
     if (this.initPromise) return this.initPromise;
     this.initPromise = this.loadInitialData();
@@ -107,6 +183,7 @@ class ClinicService {
           if (sqliteValue) {
             this.data = parseAndValidateClinicData(sqliteValue);
             this.store = sqliteStore;
+            this.sqliteStore = sqliteStore;
             this.storageStatus = {
               primary: 'sqlite',
               message: status.dbPath ? `SQLite 数据库：${status.dbPath}` : 'SQLite 数据库已启用。'
@@ -120,6 +197,7 @@ class ClinicService {
           if (legacyValue) {
             this.data = parseAndValidateClinicData(legacyValue);
             this.store = sqliteStore;
+            this.sqliteStore = sqliteStore;
             this.storageStatus = {
               primary: 'sqlite',
               message: '已从旧 localStorage 迁移到 SQLite，旧数据仍保留作为兜底。'
@@ -131,6 +209,7 @@ class ClinicService {
 
           this.data = createEmptyData();
           this.store = sqliteStore;
+          this.sqliteStore = sqliteStore;
           this.storageStatus = {
             primary: 'sqlite',
             message: status.dbPath ? `SQLite 数据库：${status.dbPath}` : 'SQLite 数据库已启用。'
@@ -185,6 +264,7 @@ class ClinicService {
   }
 
   async saveDataAsync() {
+    // 保存时始终刷新数据版本，避免旧导入数据继续带着历史 version 写回。
     this.data.version = DATA_VERSION;
     this.data.dataVersion = DATA_VERSION;
     const serialized = JSON.stringify(this.data);
@@ -194,6 +274,7 @@ class ClinicService {
       await this.store.setItem(CLINIC_DATA_STORE_KEY, serialized);
     } catch (error) {
       this.store = this.localStore;
+      this.sqliteStore = null;
       this.storageStatus = {
         primary: 'localStorage',
         message: `SQLite 写入失败，已回退 localStorage：${error instanceof Error ? error.message : String(error)}`
@@ -212,7 +293,7 @@ class ClinicService {
     return this.storageStatus;
   }
 
-  // --- Settings ---
+  // --- 设置 ---
   getClinicName(): string {
     return this.data.clinicName || 'DentalClinic';
   }
@@ -222,7 +303,7 @@ class ClinicService {
     this.saveData();
   }
 
-  // --- Import / Export ---
+  // --- 导入 / 导出 ---
 
   exportData(): string {
     return JSON.stringify(this.data, null, 2);
@@ -331,6 +412,7 @@ class ClinicService {
         return { success: false, message: '云端数据格式不正确。' };
       }
 
+      // 云端拉取是覆盖式写入，所以必须先迁移并校验完整数据结构。
       const migrated = migrateClinicData(remoteData);
       const validation = validateClinicData(migrated);
       if (!validation.valid) {
@@ -568,7 +650,90 @@ class ClinicService {
     }
   }
 
-  // --- Catalog Management ---
+  createImportPreview(jsonString: string): ImportPreviewResult {
+    try {
+      const incoming = parseAndValidateClinicData(jsonString);
+      const currentPatients = Object.values(this.data.patients);
+      const incomingPatients = Object.values(incoming.patients);
+      const currentAppointments = flattenAppointments(this.data);
+      const incomingAppointments = flattenAppointments(incoming);
+      const currentTreatments = currentPatients.flatMap(patient => (
+        patient.treatments.map(treatment => ({ patientId: patient.id, treatment }))
+      ));
+      const incomingTreatments = incomingPatients.flatMap(patient => (
+        patient.treatments.map(treatment => ({ patientId: patient.id, treatment }))
+      ));
+      const currentCatalogCategories = this.data.catalog;
+      const incomingCatalogCategories = incoming.catalog;
+      const currentCatalogItems = this.data.catalog.flatMap(category => (
+        category.items.map(item => ({ categoryId: category.id, item }))
+      ));
+      const incomingCatalogItems = incoming.catalog.flatMap(category => (
+        category.items.map(item => ({ categoryId: category.id, item }))
+      ));
+
+      const currentPatientMap = new Map(currentPatients.map(patient => [patient.id, patient]));
+      const incomingPatientMap = new Map(incomingPatients.map(patient => [patient.id, patient]));
+      const addedPatients: string[] = [];
+      const overwrittenPatients: string[] = [];
+      const removedPatients: string[] = [];
+
+      incomingPatientMap.forEach((patient, id) => {
+        const current = currentPatientMap.get(id);
+        if (!current) {
+          addedPatients.push(patientLabel(patient));
+          return;
+        }
+        if (JSON.stringify(current) !== JSON.stringify(patient)) overwrittenPatients.push(patientLabel(patient));
+      });
+      currentPatientMap.forEach((patient, id) => {
+        if (!incomingPatientMap.has(id)) removedPatients.push(patientLabel(patient));
+      });
+
+      const warnings: string[] = [
+        '确认导入后，当前本机主数据会被导入文件整体覆盖。',
+        '系统会先保存一份导入前备份，可在设置页恢复最近一次导入前状态。'
+      ];
+      if ((this.data.clinicName || 'DentalClinic') !== (incoming.clinicName || 'DentalClinic')) {
+        warnings.push(`诊所名称将从“${this.data.clinicName || 'DentalClinic'}”变为“${incoming.clinicName || 'DentalClinic'}”。`);
+      }
+      if ((incoming.dataVersion || incoming.version || 0) < DATA_VERSION) {
+        warnings.push(`导入文件数据版本较旧，已预览迁移到当前数据版本 ${DATA_VERSION} 后的结果。`);
+      }
+      if (removedPatients.length > 0) {
+        warnings.push(`导入文件中缺少 ${removedPatients.length} 位当前患者，确认后这些患者会从本机主数据中移除。`);
+      }
+
+      const preview: ImportPreview = {
+        currentClinicName: this.data.clinicName || 'DentalClinic',
+        incomingClinicName: incoming.clinicName || 'DentalClinic',
+        dataVersion: incoming.dataVersion || incoming.version,
+        metrics: [
+          createDiffMetric('患者档案', currentPatients, incomingPatients, patient => patient.id),
+          createDiffMetric('预约记录', currentAppointments, incomingAppointments, appointment => appointment.id),
+          createDiffMetric('处置记录', currentTreatments, incomingTreatments, item => `${item.patientId}:${item.treatment.id}`),
+          createDiffMetric('处置分类', currentCatalogCategories, incomingCatalogCategories, category => category.id),
+          createDiffMetric('目录项目', currentCatalogItems, incomingCatalogItems, item => `${item.categoryId}:${item.item.id}`)
+        ],
+        warnings,
+        samples: {
+          addedPatients: addedPatients.slice(0, 5),
+          overwrittenPatients: overwrittenPatients.slice(0, 5),
+          removedPatients: removedPatients.slice(0, 5)
+        }
+      };
+
+      return {
+        success: true,
+        message: `导入预览已生成：${incomingPatients.length} 位患者、${incomingAppointments.length} 条预约、${countTreatments(incoming)} 条处置记录、${countCatalogItems(incoming)} 个目录项目。`,
+        preview
+      };
+    } catch (e) {
+      return { success: false, message: e instanceof Error ? `预览失败：${e.message}` : '预览失败，无法解析 JSON 文件。' };
+    }
+  }
+
+  // --- 处置目录管理 ---
 
   getCatalog(): TreatmentCategory[] {
     return this.data.catalog;
@@ -579,10 +744,65 @@ class ClinicService {
     this.saveData();
   }
 
-  // --- Patient Management ---
+  // --- 患者管理 ---
 
   getAllPatients(): Patient[] {
     return Object.values(this.data.patients);
+  }
+
+  private getPatientListPageFromMemory(query: PatientListQuery): PatientListPage {
+    const offset = Math.max(0, Number(query.offset) || 0);
+    const limit = Math.min(200, Math.max(1, Number(query.limit) || 80));
+    const q = (query.query || '').trim().toLowerCase();
+    const phoneCounts = Object.values(this.data.patients).reduce<Record<string, number>>((counts, patient) => {
+      if (patient.phone) counts[patient.phone] = (counts[patient.phone] || 0) + 1;
+      return counts;
+    }, {});
+
+    const items = Object.values(this.data.patients)
+      .filter(patient => {
+        if (!q) return true;
+        const searchText = [
+          patient.name,
+          patient.phone,
+          patient.gender,
+          patient.age,
+          getPatientPinyinTerms(patient.name)
+        ].join(' ').toLowerCase();
+        return searchText.includes(q);
+      })
+      .map<PatientListItem>(patient => ({
+        id: patient.id,
+        name: patient.name,
+        phone: patient.phone,
+        gender: patient.gender,
+        age: patient.age,
+        lastUpdate: getPatientLastUpdate(patient),
+        phoneCount: patient.phone ? phoneCounts[patient.phone] || 0 : 0
+      }))
+      .sort((a, b) => {
+        const dateSort = b.lastUpdate.localeCompare(a.lastUpdate);
+        return dateSort || a.name.localeCompare(b.name);
+      });
+
+    return {
+      items: items.slice(offset, offset + limit),
+      total: items.length,
+      offset,
+      limit
+    };
+  }
+
+  async getPatientListPage(query: PatientListQuery): Promise<PatientListPage> {
+    this.ensureInitialized();
+    if (this.sqliteStore && this.storageStatus.primary === 'sqlite') {
+      try {
+        return await this.sqliteStore.listPatients(query);
+      } catch (error) {
+        console.error('SQLite 患者分页查询失败，回退内存过滤。', error);
+      }
+    }
+    return this.getPatientListPageFromMemory(query);
   }
 
   getPatient(patientId: string): Patient | undefined {
@@ -656,7 +876,7 @@ class ClinicService {
     });
   }
 
-  // --- Treatments ---
+  // --- 处置记录 ---
 
   addTreatment(patientId: string, item: TreatmentItem, price: number, teeth: string, note: string, categoryId?: string): boolean {
     const patient = this.data.patients[patientId];
@@ -690,6 +910,7 @@ class ClinicService {
         const after: Record<string, string | number | undefined> = {};
         const changedFields: string[] = [];
 
+        // 修改日志只记录真正变化的字段，避免保存按钮产生空审计记录。
         TREATMENT_LOG_FIELDS.forEach(field => {
           if (!(field in updates)) return;
           const oldValue = current[field] as string | number | undefined;
@@ -737,7 +958,7 @@ class ClinicService {
     return false;
   }
 
-  // --- Appointments ---
+  // --- 预约管理 ---
 
   private findAppointmentById(appointmentId: string): { dateKey: string; appointment: GlobalAppointment } | undefined {
     for (const [dateKey, appts] of Object.entries(this.data.appointments)) {
@@ -748,6 +969,7 @@ class ClinicService {
   }
 
   private findAppointmentConflict(date: string, time: string, excludeId?: string): GlobalAppointment | undefined {
+    // 当前尚未建模医生/椅位资源，因此冲突范围是同一天同一时间的未取消预约。
     return (this.data.appointments[date] || []).find(appt => (
       appt.id !== excludeId
       && appt.time === time
@@ -756,6 +978,7 @@ class ClinicService {
   }
 
   private syncPatientAppointmentSnapshot(appt: GlobalAppointment) {
+    // 患者详情中的预约历史是全局预约的展示快照，状态和时间要跟随全局记录同步。
     const patient = this.data.patients[appt.patientId];
     if (!patient) return;
     const snapshot = patient.appointments.find(item => item.id === appt.id);

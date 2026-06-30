@@ -1,3 +1,4 @@
+import { PatientListPage, PatientListQuery } from '../../types';
 import { KeyValueStore, StorageStatusResult } from './types';
 
 export class ElectronSqliteStore implements KeyValueStore {
@@ -25,5 +26,17 @@ export class ElectronSqliteStore implements KeyValueStore {
     if (!window.electronSqliteStore) throw new Error('当前环境未提供 SQLite 存储接口。');
     const result = await window.electronSqliteStore.set(key, value);
     if (!result.success) throw new Error(result.error || 'SQLite 写入失败。');
+  }
+
+  async listPatients(query: PatientListQuery): Promise<PatientListPage> {
+    if (!window.electronSqliteStore?.listPatients) throw new Error('当前环境未提供 SQLite 患者查询接口。');
+    const result = await window.electronSqliteStore.listPatients(query);
+    if (!result.success) throw new Error(result.error || 'SQLite 患者查询失败。');
+    return {
+      items: result.items,
+      total: result.total,
+      offset: result.offset,
+      limit: result.limit
+    };
   }
 }

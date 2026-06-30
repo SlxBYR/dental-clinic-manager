@@ -51,6 +51,29 @@ export interface Patient {
   appointments: Appointment[];
 }
 
+export interface PatientListItem {
+  id: string;
+  name: string;
+  phone: string;
+  gender: string;
+  age: string;
+  lastUpdate: string;
+  phoneCount: number;
+}
+
+export interface PatientListQuery {
+  query?: string;
+  offset: number;
+  limit: number;
+}
+
+export interface PatientListPage {
+  items: PatientListItem[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
 export type AppointmentStatus = 'pending' | 'completed' | 'cancelled';
 
 export interface GlobalAppointment {
@@ -102,6 +125,34 @@ export interface ReleaseCheckResult {
   releaseUrl?: string;
   publishedAt?: string;
   message: string;
+}
+
+export interface ImportPreviewMetric {
+  label: string;
+  current: number;
+  incoming: number;
+  added: number;
+  overwritten: number;
+  removed: number;
+}
+
+export interface ImportPreview {
+  currentClinicName: string;
+  incomingClinicName: string;
+  dataVersion?: number;
+  metrics: ImportPreviewMetric[];
+  warnings: string[];
+  samples: {
+    addedPatients: string[];
+    overwrittenPatients: string[];
+    removedPatients: string[];
+  };
+}
+
+export interface ImportPreviewResult {
+  success: boolean;
+  message: string;
+  preview?: ImportPreview;
 }
 
 export interface BackupPayload {
