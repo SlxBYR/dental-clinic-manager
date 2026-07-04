@@ -41,10 +41,12 @@ export const normalizeAppointmentStatus = (status: unknown): AppointmentStatus =
 
 const normalizeLogValueMap = (value: any): Record<string, string | number | undefined> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  return Object.entries(value).reduce<Record<string, string | number | undefined>>((result, [key, fieldValue]) => {
-    if (typeof fieldValue === 'string' || typeof fieldValue === 'number' || fieldValue === undefined) {
+  return Object.entries(value as Record<string, unknown>).reduce<Record<string, string | number | undefined>>((result, [key, fieldValue]) => {
+    if (typeof fieldValue === 'string') {
       result[key] = fieldValue;
-    } else if (fieldValue === null) {
+    } else if (typeof fieldValue === 'number') {
+      result[key] = fieldValue;
+    } else if (fieldValue === null || fieldValue === undefined) {
       result[key] = undefined;
     } else {
       result[key] = String(fieldValue);
@@ -122,6 +124,7 @@ export const migrateClinicData = (raw: any): ClinicData => {
     data.patients[id] = {
       ...oldPatient,
       id,
+      createdAt: typeof oldPatient.createdAt === 'string' && oldPatient.createdAt.trim() ? oldPatient.createdAt : undefined,
       patientGroupId,
       name,
       phone,

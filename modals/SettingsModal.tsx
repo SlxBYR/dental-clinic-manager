@@ -1,16 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Check, Download, Edit2, ExternalLink, Plus, RefreshCw, Save, Settings, Trash2, Upload, X } from 'lucide-react';
+import { Bot, Check, Database, Download, Edit2, ExternalLink, Plus, RefreshCw, Save, Settings, Trash2, Upload, X } from 'lucide-react';
 import { APP_VERSION } from '../constants';
 import { clinicService } from '../services/clinicService';
-import { CloudSyncResult, ImportPreview, ReleaseCheckResult, TreatmentCategory, TreatmentItem } from '../types';
+import { aiService } from '../services/aiService';
+import { externalRagSourceService } from '../services/externalRagSourceService';
+import { CloudSyncResult, ImportPreview, RagExternalSourceConfig, ReleaseCheckResult, TreatmentCategory, TreatmentItem } from '../types';
 import { Button } from '../components/Button';
 import { ModalBase } from './ModalBase';
 import { ConfirmationModal } from './ConfirmationModal';
 import { getErrorStatusClass, getSuccessStatusClass } from '../utils/statusStyles';
 
 export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClose: () => void, onRefresh: () => void, currentClinicName: string }) => {
-  const [tab, setTab] = useState<'data' | 'catalog'>('data');
+  const [tab, setTab] = useState<'data' | 'ai' | 'external' | 'catalog'>('data');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const isMountedRef = useRef(true);
   const [clinicNameForm, setClinicNameForm] = useState(currentClinicName);
   const [backupSettings, setBackupSettings] = useState(clinicService.getBackupSettings());
   const [backupStatus, setBackupStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
@@ -28,6 +31,11 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
   const [importStatus, setImportStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [hasPreImportBackup, setHasPreImportBackup] = useState(clinicService.hasPreImportBackup());
   const [storageStatus] = useState(clinicService.getStorageStatus());
+  const [aiSettings, setAiSettings] = useState(aiService.getSettings());
+  const [aiStatus, setAiStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [externalSources, setExternalSources] = useState<RagExternalSourceConfig[]>(externalRagSourceService.getSources());
+  const [externalStatus, setExternalStatus] = useState<Record<string, { type: 'success' | 'error'; message: string }>>({});
+  const [syncingExternalSourceId, setSyncingExternalSourceId] = useState<string | null>(null);
 
   // 处置目录直接影响新增处置时的默认价格。
   const [catalog, setCatalog] = useState<TreatmentCategory[]>(clinicService.getCatalog());
@@ -40,6 +48,10 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
   // 编辑项目时只保存当前项目的局部状态。
   const [editingItem, setEditingItem] = useState<{catId: string, itemId: string} | null>(null);
   const [editItemForm, setEditItemForm] = useState({ name: '', price: 0 });
+
+  useEffect(() => () => {
+    isMountedRef.current = false;
+  }, []);
 
   const handleSaveClinicName = () => {
     clinicService.updateClinicName(clinicNameForm.trim());
@@ -57,6 +69,7 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
     setBackupStatus(null);
     clinicService.updateBackupSettings(backupSettings);
     const result = await clinicService.sendBackupToServer(backupSettings);
+    if (!isMountedRef.current) return;
     setBackupStatus({ type: result.success ? 'success' : 'error', message: result.message });
     setIsSendingBackup(false);
   };
@@ -72,6 +85,7 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
     setCloudSyncStatus(null);
     clinicService.updateCloudSyncSettings(cloudSyncSettings);
     const result = await clinicService.pullCloudData(cloudSyncSettings);
+    if (!isMountedRef.current) return;
     setCloudSyncStatus(result);
     if (result.success) onRefresh();
     setIsPullingCloud(false);
@@ -82,6 +96,7 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
     setCloudSyncStatus(null);
     clinicService.updateCloudSyncSettings(cloudSyncSettings);
     const result = await clinicService.pushCloudData(cloudSyncSettings);
+    if (!isMountedRef.current) return;
     setCloudSyncStatus(result);
     setIsPushingCloud(false);
   };
@@ -100,8 +115,72 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
     setIsCheckingRelease(true);
     clinicService.updateReleaseSettings(settings);
     const result = await clinicService.checkLatestRelease(settings);
+    if (!isMountedRef.current) return;
     setReleaseStatus(result);
     setIsCheckingRelease(false);
+  };
+
+  const handleSaveAiSettings = () => {
+    aiService.updateSettings(aiSettings);
+    setAiSettings(aiService.getSettings());
+    setAiStatus({ type: 'success', message: aiSettings.enabled ? 'AI 设置已保存。' : 'AI 已保持关闭。' });
+  };
+
+  const updateExternalSource = (sourceId: string, updates: Partial<RagExternalSourceConfig>) => {
+    setExternalSources(prev => prev.map(source => source.id === sourceId ? { ...source, ...updates } : source));
+    setExternalStatus(prev => {
+      const next = { ...prev };
+      delete next[sourceId];
+      return next;
+    });
+  };
+
+  const addExternalSource = () => {
+    const source = externalRagSourceService.createSource();
+    setExternalSources(prev => [source, ...prev]);
+  };
+
+  const saveExternalSource = (source: RagExternalSourceConfig) => {
+    const saved = externalRagSourceService.upsertSource(source);
+    setExternalSources(externalRagSourceService.getSources());
+    setExternalStatus(prev => ({
+      ...prev,
+      [saved.id]: { type: 'success', message: '外部数据源配置已保存。' }
+    }));
+  };
+
+  const deleteExternalSource = (sourceId: string) => {
+    if (!confirm('确定删除这个外部数据源配置吗？已同步的 RAG 条目不会自动删除。')) return;
+    externalRagSourceService.deleteSource(sourceId);
+    setExternalSources(externalRagSourceService.getSources());
+  };
+
+  const testExternalSource = async (source: RagExternalSourceConfig) => {
+    const saved = externalRagSourceService.upsertSource(source);
+    setExternalSources(externalRagSourceService.getSources());
+    setSyncingExternalSourceId(saved.id);
+    const result = await externalRagSourceService.testConnection(saved);
+    if (!isMountedRef.current) return;
+    setExternalStatus(prev => ({
+      ...prev,
+      [saved.id]: { type: result.success ? 'success' : 'error', message: result.message }
+    }));
+    if (result.success) onRefresh();
+    setSyncingExternalSourceId(null);
+  };
+
+  const syncExternalSource = async (source: RagExternalSourceConfig) => {
+    const saved = externalRagSourceService.upsertSource(source);
+    setExternalSources(externalRagSourceService.getSources());
+    setSyncingExternalSourceId(saved.id);
+    const result = await externalRagSourceService.syncSource(saved);
+    if (!isMountedRef.current) return;
+    setExternalSources(externalRagSourceService.getSources());
+    setExternalStatus(prev => ({
+      ...prev,
+      [saved.id]: { type: result.success ? 'success' : 'error', message: result.message }
+    }));
+    setSyncingExternalSourceId(null);
   };
 
   useEffect(() => {
@@ -252,6 +331,8 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
     <ModalBase title="系统设置" onClose={onClose} size="lg">
       <div className="flex gap-6 mb-8 border-b border-slate-200">
         <button onClick={() => setTab('data')} className={`pb-3 px-2 text-lg font-medium transition-colors ${tab === 'data' ? 'border-b-2 border-teal-600 text-teal-800' : 'text-slate-500 hover:text-slate-700'}`}>通用与数据</button>
+        <button onClick={() => setTab('ai')} className={`pb-3 px-2 text-lg font-medium transition-colors ${tab === 'ai' ? 'border-b-2 border-teal-600 text-teal-800' : 'text-slate-500 hover:text-slate-700'}`}>AI 设置</button>
+        <button onClick={() => setTab('external')} className={`pb-3 px-2 text-lg font-medium transition-colors ${tab === 'external' ? 'border-b-2 border-teal-600 text-teal-800' : 'text-slate-500 hover:text-slate-700'}`}>外部数据源</button>
         <button onClick={() => setTab('catalog')} className={`pb-3 px-2 text-lg font-medium transition-colors ${tab === 'catalog' ? 'border-b-2 border-teal-600 text-teal-800' : 'text-slate-500 hover:text-slate-700'}`}>处置项目管理</button>
       </div>
 
@@ -480,6 +561,265 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
               <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-slate-400">暂无导入前备份</div>
             )}
           </div>
+        </div>
+      )}
+
+      {tab === 'ai' && (
+        <div className="space-y-6">
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 text-amber-900">
+            <div className="font-bold">患者信息发送提醒</div>
+            <div className="mt-1 text-sm leading-6">
+              开启 AI 后，生成回答时可能会把检索命中的患者资料、处置备注或预约信息发送到第三方服务。默认关闭 AI，并默认使用严格脱敏。
+            </div>
+          </div>
+
+          <div className="bg-slate-50 p-8 rounded-xl border border-slate-200">
+            <h4 className="font-bold text-slate-800 mb-5 flex items-center gap-2 text-lg">
+              <Bot size={24} className="text-teal-600" /> AI 回答设置
+            </h4>
+            <div className="space-y-5">
+              <label className="inline-flex items-center gap-3 text-slate-700 font-medium">
+                <input
+                  type="checkbox"
+                  className="h-5 w-5 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                  checked={aiSettings.enabled}
+                  onChange={e => {
+                    setAiSettings({ ...aiSettings, enabled: e.target.checked });
+                    setAiStatus(null);
+                  }}
+                />
+                启用 AI 回答
+              </label>
+
+              <div>
+                <label className="block text-slate-600 mb-2 font-medium">Provider</label>
+                <select
+                  className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none bg-white focus:ring-2 focus:ring-teal-500"
+                  value={aiSettings.provider}
+                  onChange={() => setAiSettings({ ...aiSettings, provider: 'openai-compatible' })}
+                >
+                  <option value="openai-compatible">OpenAI-compatible</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-slate-600 mb-2 font-medium">Base URL</label>
+                <input
+                  className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none focus:ring-2 focus:ring-teal-500"
+                  placeholder="https://api.openai.com/v1"
+                  value={aiSettings.baseUrl}
+                  onChange={e => {
+                    setAiSettings({ ...aiSettings, baseUrl: e.target.value });
+                    setAiStatus(null);
+                  }}
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-600 mb-2 font-medium">API Key</label>
+                <input
+                  type="password"
+                  className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none focus:ring-2 focus:ring-teal-500"
+                  value={aiSettings.apiKey}
+                  onChange={e => {
+                    setAiSettings({ ...aiSettings, apiKey: e.target.value });
+                    setAiStatus(null);
+                  }}
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-600 mb-2 font-medium">模型</label>
+                <input
+                  className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none focus:ring-2 focus:ring-teal-500"
+                  placeholder="例如 gpt-4.1-mini 或兼容接口模型名"
+                  value={aiSettings.model}
+                  onChange={e => {
+                    setAiSettings({ ...aiSettings, model: e.target.value });
+                    setAiStatus(null);
+                  }}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-slate-600 mb-2 font-medium">脱敏模式</label>
+                  <select
+                    className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none bg-white focus:ring-2 focus:ring-teal-500"
+                    value={aiSettings.redactionMode}
+                    onChange={e => {
+                      setAiSettings({ ...aiSettings, redactionMode: e.target.value as typeof aiSettings.redactionMode });
+                      setAiStatus(null);
+                    }}
+                  >
+                    <option value="strict">严格脱敏</option>
+                    <option value="basic">基础脱敏</option>
+                    <option value="off">不脱敏</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-slate-600 mb-2 font-medium">上下文片段数</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={12}
+                    className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none focus:ring-2 focus:ring-teal-500"
+                    value={aiSettings.maxContextChunks}
+                    onChange={e => {
+                      setAiSettings({ ...aiSettings, maxContextChunks: Number(e.target.value) });
+                      setAiStatus(null);
+                    }}
+                  />
+                </div>
+              </div>
+
+              <label className="inline-flex items-center gap-3 text-slate-700 font-medium">
+                <input
+                  type="checkbox"
+                  className="h-5 w-5 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                  checked={aiSettings.sendPatientInfo}
+                  onChange={e => {
+                    const sendPatientInfo = e.target.checked;
+                    setAiSettings({
+                      ...aiSettings,
+                      sendPatientInfo,
+                      redactionMode: sendPatientInfo ? aiSettings.redactionMode : 'strict'
+                    });
+                    setAiStatus(null);
+                  }}
+                />
+                允许向 AI 服务发送可识别患者信息
+              </label>
+
+              {aiStatus && (
+                <div className={`rounded-lg border px-4 py-3 text-base ${
+                  aiStatus.type === 'success'
+                    ? 'border-teal-200 bg-teal-50 text-teal-800'
+                    : 'border-red-200 bg-red-50 text-red-700'
+                }`}>
+                  {aiStatus.message}
+                </div>
+              )}
+
+              <div className="flex justify-end">
+                <Button onClick={handleSaveAiSettings} size="lg">保存 AI 设置</Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab === 'external' && (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h4 className="font-bold text-slate-800 flex items-center gap-2 text-lg">
+                <Database size={24} className="text-teal-600" /> 外部数据源
+              </h4>
+              <p className="mt-1 text-sm text-slate-500">第一版支持只读 HTTP JSON 数据源；同步数据只进入 RAG 知识库，不自动覆盖患者档案。</p>
+            </div>
+            <Button onClick={addExternalSource}>
+              <Plus size={18} className="mr-2" /> 新增数据源
+            </Button>
+          </div>
+
+          {externalSources.length === 0 ? (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-5 py-8 text-center text-slate-500">
+              暂无外部数据源。
+            </div>
+          ) : (
+            <div className="space-y-5">
+              {externalSources.map(source => {
+                const status = externalStatus[source.id];
+                const isBusy = syncingExternalSourceId === source.id;
+                return (
+                  <div key={source.id} className="rounded-xl border border-slate-200 bg-slate-50 p-6">
+                    <div className="mb-5 flex items-center justify-between gap-4">
+                      <div className="font-bold text-slate-800">{source.name || '外部 JSON 数据源'}</div>
+                      <button
+                        onClick={() => deleteExternalSource(source.id)}
+                        className="text-slate-400 hover:text-red-500 p-2 rounded hover:bg-red-50 transition-colors"
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                    </div>
+
+                    <div className="space-y-4">
+                      <label className="inline-flex items-center gap-3 text-slate-700 font-medium">
+                        <input
+                          type="checkbox"
+                          className="h-5 w-5 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                          checked={source.enabled}
+                          onChange={e => updateExternalSource(source.id, { enabled: e.target.checked })}
+                        />
+                        启用该数据源
+                      </label>
+
+                      <div>
+                        <label className="block text-slate-600 mb-2 font-medium">名称</label>
+                        <input
+                          className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none focus:ring-2 focus:ring-teal-500"
+                          value={source.name}
+                          onChange={e => updateExternalSource(source.id, { name: e.target.value })}
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-slate-600 mb-2 font-medium">HTTP JSON Endpoint</label>
+                        <input
+                          className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none focus:ring-2 focus:ring-teal-500"
+                          placeholder="https://your-domain.example.com/rag-source"
+                          value={source.endpoint}
+                          onChange={e => updateExternalSource(source.id, { endpoint: e.target.value })}
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-slate-600 mb-2 font-medium">Token（可选）</label>
+                        <input
+                          type="password"
+                          className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none focus:ring-2 focus:ring-teal-500"
+                          value={source.token || ''}
+                          onChange={e => updateExternalSource(source.id, { token: e.target.value })}
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                        <div className="rounded-lg border border-slate-200 bg-white px-4 py-3">
+                          <div className="text-slate-500">Cursor</div>
+                          <div className="mt-1 truncate font-mono text-slate-700">{source.cursor || '-'}</div>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-white px-4 py-3">
+                          <div className="text-slate-500">最近同步</div>
+                          <div className="mt-1 truncate font-mono text-slate-700">{source.lastSyncedAt || '-'}</div>
+                        </div>
+                      </div>
+
+                      {status && (
+                        <div className={`rounded-lg border px-4 py-3 text-base ${
+                          status.type === 'success'
+                            ? 'border-teal-200 bg-teal-50 text-teal-800'
+                            : 'border-red-200 bg-red-50 text-red-700'
+                        }`}>
+                          {status.message}
+                        </div>
+                      )}
+
+                      <div className="flex flex-wrap gap-3">
+                        <Button onClick={() => saveExternalSource(source)} variant="secondary" size="lg">保存配置</Button>
+                        <Button onClick={() => testExternalSource(source)} variant="secondary" size="lg" disabled={isBusy}>
+                          {isBusy ? '请求中...' : '测试连接'}
+                        </Button>
+                        <Button onClick={() => syncExternalSource(source)} size="lg" disabled={isBusy || !source.enabled}>
+                          {isBusy ? '同步中...' : '同步到 RAG'}
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 

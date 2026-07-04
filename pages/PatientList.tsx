@@ -22,13 +22,18 @@ export const PatientList = ({ onSelect, onRefresh }: { patients: Patient[], onSe
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const loadedPagesRef = useRef<Set<number>>(new Set());
   const pendingPagesRef = useRef<Set<number>>(new Set());
+  const requestGenerationRef = useRef(0);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => setQuery(search.trim()), 160);
     return () => window.clearTimeout(timeout);
   }, [search]);
 
-  const loadPage = useCallback(async (pageIndex: number) => {
+  useEffect(() => () => {
+    requestGenerationRef.current += 1;
+  }, []);
+
+  const loadPage = useCallback(async (pageIndex: number, generation = requestGenerationRef.current) => {
     if (pageIndex < 0 || loadedPagesRef.current.has(pageIndex) || pendingPagesRef.current.has(pageIndex)) return;
     pendingPagesRef.current.add(pageIndex);
     setLoading(true);
@@ -37,6 +42,7 @@ export const PatientList = ({ onSelect, onRefresh }: { patients: Patient[], onSe
     try {
       const offset = pageIndex * PAGE_SIZE;
       const page = await clinicService.getPatientListPage({ query, offset, limit: PAGE_SIZE });
+      if (requestGenerationRef.current !== generation) return;
       setTotal(page.total);
       setItemsByIndex(prev => {
         const next = { ...prev };
@@ -47,21 +53,25 @@ export const PatientList = ({ onSelect, onRefresh }: { patients: Patient[], onSe
       });
       loadedPagesRef.current.add(pageIndex);
     } catch (err) {
+      if (requestGenerationRef.current !== generation) return;
       setError(err instanceof Error ? err.message : '患者列表加载失败。');
     } finally {
+      if (requestGenerationRef.current !== generation) return;
       pendingPagesRef.current.delete(pageIndex);
       setLoading(pendingPagesRef.current.size > 0);
     }
   }, [query]);
 
   useEffect(() => {
+    requestGenerationRef.current += 1;
+    const generation = requestGenerationRef.current;
     loadedPagesRef.current = new Set();
     pendingPagesRef.current = new Set();
     setItemsByIndex({});
     setTotal(0);
     setScrollTop(0);
     scrollerRef.current?.scrollTo({ top: 0 });
-    loadPage(0);
+    loadPage(0, generation);
   }, [loadPage]);
 
   useEffect(() => {

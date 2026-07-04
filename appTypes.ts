@@ -1,1 +1,1 @@
-export type View = 'dashboard' | 'patients' | 'schedule' | 'reports';
+export type View = 'dashboard' | 'patients' | 'schedule' | 'reports' | 'rag';

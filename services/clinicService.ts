@@ -9,6 +9,18 @@ import * as pinyin from 'tiny-pinyin';
 
 const normalizeName = (name: string) => name.trim().replace(/\s+/g, ' ').toLowerCase();
 const normalizePhone = (phone: string) => phone.trim().replace(/\s/g, '');
+const CLOUD_ENCRYPTION_ITERATIONS = 210000;
+
+type EncryptedCloudPayload = {
+  encrypted: true;
+  algorithm: 'AES-GCM';
+  kdf: 'PBKDF2-SHA-256';
+  iterations: number;
+  salt: string;
+  iv: string;
+  ciphertext: string;
+};
+
 const formatDateKey = (date: Date) => {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -42,6 +54,82 @@ const compareVersions = (a: string, b: string) => {
     if (diff !== 0) return diff;
   }
   return 0;
+};
+
+const bytesToBase64 = (bytes: Uint8Array) => {
+  let binary = '';
+  bytes.forEach(byte => { binary += String.fromCharCode(byte); });
+  return btoa(binary);
+};
+
+const base64ToBytes = (value: string) => {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+};
+
+const deriveCloudCryptoKey = async (passphrase: string, salt: Uint8Array, iterations = CLOUD_ENCRYPTION_ITERATIONS) => {
+  const material = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(passphrase),
+    'PBKDF2',
+    false,
+    ['deriveKey']
+  );
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
+    material,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
+};
+
+const encryptCloudPayload = async (payload: unknown, passphrase: string): Promise<EncryptedCloudPayload> => {
+  if (!crypto?.subtle) throw new Error('当前环境不支持 Web Crypto，无法加密云端备份。');
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveCloudCryptoKey(passphrase, salt);
+  const plaintext = new TextEncoder().encode(JSON.stringify(payload));
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext));
+  return {
+    encrypted: true,
+    algorithm: 'AES-GCM',
+    kdf: 'PBKDF2-SHA-256',
+    iterations: CLOUD_ENCRYPTION_ITERATIONS,
+    salt: bytesToBase64(salt),
+    iv: bytesToBase64(iv),
+    ciphertext: bytesToBase64(ciphertext)
+  };
+};
+
+const isEncryptedCloudPayload = (payload: unknown): payload is EncryptedCloudPayload => (
+  Boolean(payload)
+  && typeof payload === 'object'
+  && (payload as EncryptedCloudPayload).encrypted === true
+  && (payload as EncryptedCloudPayload).algorithm === 'AES-GCM'
+  && typeof (payload as EncryptedCloudPayload).salt === 'string'
+  && typeof (payload as EncryptedCloudPayload).iv === 'string'
+  && typeof (payload as EncryptedCloudPayload).ciphertext === 'string'
+);
+
+const decryptCloudPayload = async (payload: EncryptedCloudPayload, passphrase: string): Promise<unknown> => {
+  if (!crypto?.subtle) throw new Error('当前环境不支持 Web Crypto，无法解密云端备份。');
+  const salt = base64ToBytes(payload.salt);
+  const iv = base64ToBytes(payload.iv);
+  const ciphertext = base64ToBytes(payload.ciphertext);
+  const key = await deriveCloudCryptoKey(passphrase, salt, payload.iterations || CLOUD_ENCRYPTION_ITERATIONS);
+  const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+  return JSON.parse(new TextDecoder().decode(plaintext));
+};
+
+const extractClinicDataPayload = (payload: unknown): ClinicData | undefined => {
+  const candidate = payload as { data?: ClinicData; payload?: { data?: ClinicData }; patients?: unknown; appointments?: unknown };
+  if (candidate?.data?.patients && candidate.data.appointments) return candidate.data;
+  if (candidate?.payload?.data?.patients && candidate.payload.data.appointments) return candidate.payload.data;
+  if (candidate?.patients && candidate.appointments) return candidate as ClinicData;
+  return undefined;
 };
 
 const TREATMENT_LOG_FIELDS: Array<keyof Pick<TreatmentRecord, 'categoryId' | 'itemId' | 'item' | 'price' | 'teeth' | 'note'>> = [
@@ -79,7 +167,7 @@ const parseAndValidateClinicData = (rawJson: string): ClinicData => {
   const parsed = JSON.parse(rawJson);
   const migrated = migrateClinicData(parsed);
   const validation = validateClinicData(migrated);
-  if (!validation.valid) throw new Error(validation.message);
+  if (validation.valid === false) throw new Error(validation.message);
   return migrated;
 };
 
@@ -106,6 +194,29 @@ const getPatientLastUpdate = (patient: Patient) => {
     if (date > last) last = date;
   });
   return last;
+};
+
+const RECENT_PATIENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+const getPatientCreatedAtTime = (patient: Pick<Patient, 'createdAt'> | PatientListItem) => {
+  if (!patient.createdAt) return 0;
+  const timestamp = new Date(patient.createdAt).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+};
+
+const isRecentlyCreatedPatient = (patient: Pick<Patient, 'createdAt'> | PatientListItem, now = Date.now()) => {
+  const createdAt = getPatientCreatedAtTime(patient);
+  return createdAt > 0 && now - createdAt >= 0 && now - createdAt <= RECENT_PATIENT_WINDOW_MS;
+};
+
+const comparePatientListItems = (a: PatientListItem, b: PatientListItem, now = Date.now()) => {
+  const aRecent = isRecentlyCreatedPatient(a, now);
+  const bRecent = isRecentlyCreatedPatient(b, now);
+  if (aRecent !== bRecent) return aRecent ? -1 : 1;
+  if (aRecent && bRecent) return getPatientCreatedAtTime(b) - getPatientCreatedAtTime(a);
+
+  const dateSort = b.lastUpdate.localeCompare(a.lastUpdate);
+  return dateSort || a.name.localeCompare(b.name);
 };
 
 const getPatientPinyinTerms = (name: string) => {
@@ -200,7 +311,7 @@ class ClinicService {
             this.sqliteStore = sqliteStore;
             this.storageStatus = {
               primary: 'sqlite',
-              message: '已从旧 localStorage 迁移到 SQLite，旧数据仍保留作为兜底。'
+              message: '已从旧 localStorage 迁移到加密 SQLite，旧明文主数据已清除。'
             };
             await this.saveDataAsync();
             this.initialized = true;
@@ -268,10 +379,13 @@ class ClinicService {
     this.data.version = DATA_VERSION;
     this.data.dataVersion = DATA_VERSION;
     const serialized = JSON.stringify(this.data);
-    await this.localStore.setItem(CLINIC_DATA_STORE_KEY, serialized);
-    if (this.store.name === this.localStore.name) return;
+    if (this.store.name === this.localStore.name) {
+      await this.localStore.setItem(CLINIC_DATA_STORE_KEY, serialized);
+      return;
+    }
     try {
       await this.store.setItem(CLINIC_DATA_STORE_KEY, serialized);
+      localStorage.removeItem(STORAGE_KEY);
     } catch (error) {
       this.store = this.localStore;
       this.sqliteStore = null;
@@ -407,16 +521,20 @@ class ClinicService {
       }
 
       const payload = await response.json();
-      const remoteData = payload?.data || payload?.payload?.data || payload;
+      const remotePayload = payload?.data || payload?.payload || payload;
+      const decryptedPayload = isEncryptedCloudPayload(remotePayload)
+        ? await decryptCloudPayload(remotePayload, validation.key)
+        : remotePayload;
+      const remoteData = extractClinicDataPayload(decryptedPayload);
       if (!remoteData?.patients || !remoteData?.appointments) {
         return { success: false, message: '云端数据格式不正确。' };
       }
 
       // 云端拉取是覆盖式写入，所以必须先迁移并校验完整数据结构。
       const migrated = migrateClinicData(remoteData);
-      const validation = validateClinicData(migrated);
-      if (!validation.valid) {
-        return { success: false, message: `云端数据校验失败：${validation.message}` };
+      const dataValidation = validateClinicData(migrated);
+      if (dataValidation.valid === false) {
+        return { success: false, message: `云端数据校验失败：${dataValidation.message}` };
       }
       this.data = migrated;
       await this.saveDataAsync();
@@ -441,6 +559,7 @@ class ClinicService {
     const timeoutId = window.setTimeout(() => controller.abort(), 20000);
 
     try {
+      const encryptedPayload = await encryptCloudPayload(this.createBackupPayload(), validation.key);
       const response = await fetch(validation.endpoint.toString(), {
         method: 'POST',
         headers: {
@@ -451,7 +570,7 @@ class ClinicService {
           app: 'DentalClinicManager',
           action: 'push',
           key: validation.key,
-          payload: this.createBackupPayload()
+          payload: encryptedPayload
         }),
         signal: controller.signal
       });
@@ -460,7 +579,7 @@ class ClinicService {
         return { success: false, message: `服务器返回 ${response.status} ${response.statusText || ''}`.trim() };
       }
 
-      return { success: true, message: '本机数据已上传到云端。' };
+      return { success: true, message: '本机数据已加密上传到云端。' };
     } catch (e) {
       const message = e instanceof DOMException && e.name === 'AbortError'
         ? '云端上传超时，请稍后再试。'
@@ -594,12 +713,18 @@ class ClinicService {
         'Content-Type': 'application/json'
       };
       const token = settings.token?.trim();
+      if (!token) return { success: false, message: '加密备份需要填写 Token；该 Token 会用于派生加密密钥，避免服务器明文保存患者信息。' };
       if (token) headers.Authorization = `Bearer ${token}`;
+      const encryptedPayload = await encryptCloudPayload(this.createBackupPayload(), token);
 
       const response = await fetch(url.toString(), {
         method: 'POST',
         headers,
-        body: JSON.stringify(this.createBackupPayload()),
+        body: JSON.stringify({
+          app: 'DentalClinicManager',
+          generatedAt: new Date().toISOString(),
+          encryptedPayload
+        }),
         signal: controller.signal
       });
 
@@ -607,7 +732,7 @@ class ClinicService {
         return { success: false, message: `服务器返回 ${response.status} ${response.statusText || ''}`.trim() };
       }
 
-      return { success: true, message: '备份已发送到服务器。' };
+      return { success: true, message: '加密备份已发送到服务器。' };
     } catch (e) {
       const message = e instanceof DOMException && e.name === 'AbortError'
         ? '发送超时，请检查服务器地址或网络。'
@@ -773,6 +898,7 @@ class ClinicService {
       })
       .map<PatientListItem>(patient => ({
         id: patient.id,
+        createdAt: patient.createdAt,
         name: patient.name,
         phone: patient.phone,
         gender: patient.gender,
@@ -780,10 +906,7 @@ class ClinicService {
         lastUpdate: getPatientLastUpdate(patient),
         phoneCount: patient.phone ? phoneCounts[patient.phone] || 0 : 0
       }))
-      .sort((a, b) => {
-        const dateSort = b.lastUpdate.localeCompare(a.lastUpdate);
-        return dateSort || a.name.localeCompare(b.name);
-      });
+      .sort((a, b) => comparePatientListItems(a, b));
 
     return {
       items: items.slice(offset, offset + limit),
@@ -823,6 +946,7 @@ class ClinicService {
     this.data.patients[id] = {
       ...patient,
       id,
+      createdAt: patient.createdAt || new Date().toISOString(),
       patientGroupId: patient.patientGroupId || getPatientGroupId(cleanPhone) || `patient_${id}`,
       name: cleanName,
       phone: cleanPhone,

@@ -152,16 +152,17 @@ function isValidKey(key) {
   return typeof key === 'string' && key.length >= 24 && key.length <= 200;
 }
 
-function validateClinicData(data) {
+function validateEncryptedPayload(payload) {
   return Boolean(
-    data &&
-    typeof data === 'object' &&
-    !Array.isArray(data) &&
-    data.patients &&
-    typeof data.patients === 'object' &&
-    data.appointments &&
-    typeof data.appointments === 'object' &&
-    Array.isArray(data.catalog)
+    payload &&
+    typeof payload === 'object' &&
+    !Array.isArray(payload) &&
+    payload.encrypted === true &&
+    payload.algorithm === 'AES-GCM' &&
+    payload.kdf === 'PBKDF2-SHA-256' &&
+    typeof payload.salt === 'string' &&
+    typeof payload.iv === 'string' &&
+    typeof payload.ciphertext === 'string'
   );
 }
 
@@ -208,18 +209,17 @@ export default {
     }
 
     if (body.action === 'push') {
-      const clinicData = body.payload?.data || body.payload;
-      if (!validateClinicData(clinicData)) {
-        return json({ error: 'Invalid clinic data.' }, 400);
+      if (!validateEncryptedPayload(body.payload)) {
+        return json({ error: 'Invalid encrypted payload.' }, 400);
       }
 
       await env.DENTAL_SYNC.put(storageKey, JSON.stringify({
         app: APP_NAME,
         updatedAt: new Date().toISOString(),
-        data: clinicData
+        data: body.payload
       }));
 
-      return json({ ok: true, message: 'Cloud data saved.' });
+      return json({ ok: true, message: 'Encrypted cloud data saved.' });
     }
 
     return json({ error: 'Unknown action.' }, 400);
@@ -228,6 +228,8 @@ export default {
 ```
 
 保存并部署。
+
+新版应用会在本地用同步 Key 派生 AES-GCM 密钥，Worker 只保存密文信封，不能读取患者姓名、电话、处置记录等明文信息。同步 Key 丢失后云端密文无法恢复。
 
 ## 第 7 步：在应用里配置同步
 

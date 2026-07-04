@@ -10,11 +10,11 @@ CREATE TABLE kv_store (
 );
 ```
 
-`clinicData` 保存完整 `ClinicData` JSON。这一阶段的目标是先把主数据从 localStorage 迁移到 Electron 的 `userData` 数据库文件中，同时避免一次性重写所有业务读写逻辑。
+`clinicData` 保存完整 `ClinicData` JSON 的加密值，格式为 `enc:v1:<base64>`。加密和解密只在 Electron 主进程中进行，使用系统安全存储能力保护密钥材料；SQLite 文件中不应再出现患者姓名、电话、处置备注等明文。
 
 ## 后续目标
 
-第二阶段可以把完整 JSON 拆成关系表，提高查询、报表和同步能力。
+第二阶段如果要把完整 JSON 拆成关系表，提高查询、报表和同步能力，敏感字段必须继续加密或改用不可逆索引，不能回退到明文列。
 
 建议表：
 
@@ -32,16 +32,17 @@ CREATE TABLE kv_store (
 
 ## 建议迁移顺序
 
-1. 保留 `kv_store.clinicData` 作为兜底快照。
+1. 保留 `kv_store.clinicData` 作为加密兜底快照。
 2. 新增关系表和 `schema_version`。
-3. 首次启动时从 `clinicData` JSON 写入关系表。
-4. 所有写操作同时写关系表和 `clinicData` 快照。
-5. 报表和列表优先改为读取关系表。
-6. 验证稳定后，`clinicData` 从主数据降级为兼容导出快照。
+3. 对姓名、电话、年龄、备注、预约快照等患者相关字段使用字段级加密。
+4. 搜索只保存必要的不可逆索引，例如标准化电话的 HMAC、姓名拼音的前缀 HMAC 集合。
+5. 报表和列表优先读取关系表，但返回前必须在主进程内解密。
+6. 验证稳定后，`clinicData` 仍保留为加密兼容导出快照。
 
 ## 风险点
 
 - 预约和患者历史快照当前存在冗余，拆表时应明确以 `appointments` 为事实来源。
 - 处置修改日志需要保留顺序和原始字段值，不能在迁移时丢失。
-- 云同步如果仍使用整包覆盖，需要在拆表后继续生成兼容 `ClinicData`。
+- 云同步如果仍使用整包覆盖，需要在拆表后继续生成兼容 `ClinicData`，并维持客户端加密后上传。
 - 如果改为增量同步，需要为主要表增加 `created_at`、`updated_at`、`deleted_at` 和设备来源字段。
+- 不要在 `patients`、`appointments`、`treatments` 等表重新写入明文患者信息；历史明文关系表会在启动迁移时清空。
