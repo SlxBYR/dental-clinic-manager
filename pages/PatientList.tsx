@@ -1,31 +1,35 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronRight, Plus, Search } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { ChevronLeft, ChevronRight, Plus, Search, Stethoscope } from 'lucide-react';
 import { Patient, PatientListItem } from '../types';
 import { Button } from '../components/Button';
 import { AddPatientModal } from '../modals/AddPatientModal';
 import { clinicService } from '../services/clinicService';
+import { formatDateKey } from '../utils/date';
 
-const PAGE_SIZE = 80;
-const ROW_HEIGHT = 76;
-const OVERSCAN = 8;
+const PAGE_SIZE = 30;
 
 export const PatientList = ({ onSelect, onRefresh }: { patients: Patient[], onSelect: (id: string) => void, onRefresh: () => void }) => {
   const [search, setSearch] = useState('');
   const [query, setQuery] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
-  const [itemsByIndex, setItemsByIndex] = useState<Record<number, PatientListItem>>({});
+  const [items, setItems] = useState<PatientListItem[]>([]);
   const [total, setTotal] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [refreshToken, setRefreshToken] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [scrollTop, setScrollTop] = useState(0);
-  const [viewportHeight, setViewportHeight] = useState(520);
-  const scrollerRef = useRef<HTMLDivElement | null>(null);
-  const loadedPagesRef = useRef<Set<number>>(new Set());
-  const pendingPagesRef = useRef<Set<number>>(new Set());
   const requestGenerationRef = useRef(0);
+  const listScrollerRef = useRef<HTMLDivElement | null>(null);
+  const today = formatDateKey(new Date());
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const rangeStart = total === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1;
+  const rangeEnd = total === 0 ? 0 : Math.min(currentPage * PAGE_SIZE, total);
 
   useEffect(() => {
-    const timeout = window.setTimeout(() => setQuery(search.trim()), 160);
+    const timeout = window.setTimeout(() => {
+      setQuery(search.trim());
+      setCurrentPage(1);
+    }, 160);
     return () => window.clearTimeout(timeout);
   }, [search]);
 
@@ -33,125 +37,111 @@ export const PatientList = ({ onSelect, onRefresh }: { patients: Patient[], onSe
     requestGenerationRef.current += 1;
   }, []);
 
-  const loadPage = useCallback(async (pageIndex: number, generation = requestGenerationRef.current) => {
-    if (pageIndex < 0 || loadedPagesRef.current.has(pageIndex) || pendingPagesRef.current.has(pageIndex)) return;
-    pendingPagesRef.current.add(pageIndex);
+  const loadCurrentPage = useCallback(async () => {
+    const generation = ++requestGenerationRef.current;
     setLoading(true);
     setError('');
 
     try {
-      const offset = pageIndex * PAGE_SIZE;
-      const page = await clinicService.getPatientListPage({ query, offset, limit: PAGE_SIZE });
-      if (requestGenerationRef.current !== generation) return;
-      setTotal(page.total);
-      setItemsByIndex(prev => {
-        const next = { ...prev };
-        page.items.forEach((item, index) => {
-          next[page.offset + index] = item;
-        });
-        return next;
+      const page = await clinicService.getPatientListPage({
+        query,
+        scope: 'all',
+        today,
+        offset: (currentPage - 1) * PAGE_SIZE,
+        limit: PAGE_SIZE
       });
-      loadedPagesRef.current.add(pageIndex);
+      if (requestGenerationRef.current !== generation) return;
+
+      const lastPage = Math.max(1, Math.ceil(page.total / PAGE_SIZE));
+      setTotal(page.total);
+      if (currentPage > lastPage) {
+        setCurrentPage(lastPage);
+        return;
+      }
+      setItems(page.items);
     } catch (err) {
       if (requestGenerationRef.current !== generation) return;
+      setItems([]);
       setError(err instanceof Error ? err.message : '患者列表加载失败。');
     } finally {
-      if (requestGenerationRef.current !== generation) return;
-      pendingPagesRef.current.delete(pageIndex);
-      setLoading(pendingPagesRef.current.size > 0);
+      if (requestGenerationRef.current === generation) setLoading(false);
     }
-  }, [query]);
+  }, [currentPage, query, today]);
 
   useEffect(() => {
-    requestGenerationRef.current += 1;
-    const generation = requestGenerationRef.current;
-    loadedPagesRef.current = new Set();
-    pendingPagesRef.current = new Set();
-    setItemsByIndex({});
-    setTotal(0);
-    setScrollTop(0);
-    scrollerRef.current?.scrollTo({ top: 0 });
-    loadPage(0, generation);
-  }, [loadPage]);
+    loadCurrentPage();
+  }, [loadCurrentPage, refreshToken]);
 
   useEffect(() => {
-    const node = scrollerRef.current;
-    if (!node) return;
-    const resizeObserver = new ResizeObserver(entries => {
-      const height = entries[0]?.contentRect.height;
-      if (height) setViewportHeight(height);
-    });
-    resizeObserver.observe(node);
-    return () => resizeObserver.disconnect();
-  }, []);
+    listScrollerRef.current?.scrollTo({ top: 0 });
+  }, [currentPage, query]);
 
-  const visibleRange = useMemo(() => {
-    if (total === 0) return { start: 0, end: 0, indices: [] as number[] };
-    const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
-    const end = Math.min(total, Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT) + OVERSCAN);
-    return {
-      start,
-      end,
-      indices: Array.from({ length: Math.max(0, end - start) }, (_, index) => start + index)
-    };
-  }, [scrollTop, total, viewportHeight]);
-
-  useEffect(() => {
-    if (visibleRange.end <= visibleRange.start) return;
-    const firstPage = Math.floor(visibleRange.start / PAGE_SIZE);
-    const lastPage = Math.floor((visibleRange.end - 1) / PAGE_SIZE);
-    for (let page = firstPage; page <= lastPage; page += 1) {
-      loadPage(page);
+  const reloadPage = async (goToFirstPage = false) => {
+    try {
+      await clinicService.saveDataAsync();
+    } catch {
+      // saveDataAsync 已记录具体存储错误；仍刷新当前可用存储中的列表。
     }
-  }, [loadPage, visibleRange.end, visibleRange.start]);
+    if (goToFirstPage) setCurrentPage(1);
+    setRefreshToken(value => value + 1);
+    onRefresh();
+  };
 
-  const renderRow = (index: number) => {
-    const patient = itemsByIndex[index];
-    if (!patient) {
-      return (
-        <div
-          key={`placeholder_${index}`}
-          className="absolute left-0 right-0 grid grid-cols-[minmax(220px,1.4fr)_minmax(140px,0.9fr)_minmax(120px,0.7fr)_minmax(120px,0.7fr)_56px] items-center border-b border-slate-100 px-6"
-          style={{ top: index * ROW_HEIGHT, height: ROW_HEIGHT }}
-        >
-          <div className="h-4 w-36 rounded bg-slate-100" />
-          <div className="h-4 w-28 rounded bg-slate-100" />
-          <div className="h-4 w-20 rounded bg-slate-100" />
-          <div className="h-4 w-24 rounded bg-slate-100" />
-          <div />
+  const changePage = (page: number) => {
+    if (loading) return;
+    setCurrentPage(Math.min(totalPages, Math.max(1, page)));
+  };
+
+  const renderRow = (patient: PatientListItem) => (
+    <div
+      key={patient.id}
+      className="grid min-h-[76px] grid-cols-[minmax(220px,1.35fr)_minmax(135px,0.8fr)_minmax(120px,0.7fr)_minmax(120px,0.75fr)_130px] items-center border-b border-slate-100 px-6 text-lg transition-colors hover:bg-teal-50/30 cursor-pointer group"
+      onClick={() => onSelect(patient.id)}
+    >
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-teal-100 text-lg font-bold text-teal-700">
+          {patient.name.charAt(0)}
         </div>
-      );
-    }
-
-    return (
-      <div
-        key={patient.id}
-        className="absolute left-0 right-0 grid grid-cols-[minmax(220px,1.4fr)_minmax(140px,0.9fr)_minmax(120px,0.7fr)_minmax(120px,0.7fr)_56px] items-center border-b border-slate-100 px-6 text-lg transition-colors hover:bg-teal-50/30 cursor-pointer group"
-        style={{ top: index * ROW_HEIGHT, height: ROW_HEIGHT }}
-        onClick={() => onSelect(patient.id)}
-      >
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-teal-100 text-lg font-bold text-teal-700">
-            {patient.name.charAt(0)}
-          </div>
-          <div className="min-w-0">
-            <div className="truncate font-medium text-slate-900">{patient.name}</div>
-            {patient.phone && patient.phoneCount > 1 && (
-              <div className="mt-1 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
-                同号码组 {patient.phoneCount} 人
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="truncate text-slate-600">{patient.phone || '未填写'}</div>
-        <div className="truncate text-slate-600">{patient.gender}, {patient.age}岁</div>
-        <div className="truncate text-base text-slate-400">{patient.lastUpdate === '0000-00-00' ? '-' : patient.lastUpdate}</div>
-        <div className="text-right">
-          <ChevronRight className="inline-block text-slate-300 group-hover:text-teal-500" size={24} />
+        <div className="min-w-0">
+          <div className="truncate font-medium text-slate-900">{patient.name}</div>
+          {patient.isTodayVisit && (
+            <div className="mt-1 inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+              {patient.todayVisitType === 'initial' ? '今日初诊' : '今日复诊'}
+              {patient.lastVisitAt ? ` · ${new Date(patient.lastVisitAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}` : ''}
+            </div>
+          )}
+          {patient.phone && patient.phoneCount > 1 && (
+            <div className="mt-1 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
+              同号码组 {patient.phoneCount} 人
+            </div>
+          )}
         </div>
       </div>
-    );
-  };
+      <div className="truncate text-slate-600">{patient.phone || '未填写'}</div>
+      <div className="truncate text-slate-600">{patient.gender}, {patient.age}岁</div>
+      <div className="truncate text-base text-slate-400">{patient.lastUpdate === '0000-00-00' ? '-' : patient.lastUpdate}</div>
+      <div className="flex items-center justify-end gap-2">
+        {!patient.isTodayVisit && (
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 rounded-lg bg-teal-50 px-3 py-2 text-sm font-medium text-teal-700 hover:bg-teal-100"
+            onClick={async event => {
+              event.stopPropagation();
+              const result = clinicService.checkInPatient(patient.id, 'follow_up');
+              if (!result.success) {
+                window.alert(result.message);
+                return;
+              }
+              await reloadPage();
+            }}
+          >
+            <Stethoscope size={15} /> 复诊
+          </button>
+        )}
+        <ChevronRight className="inline-block text-slate-300 group-hover:text-teal-500" size={24} />
+      </div>
+    </div>
+  );
 
   return (
     <div className="p-8 max-w-7xl mx-auto w-full h-full flex flex-col min-h-0">
@@ -173,54 +163,89 @@ export const PatientList = ({ onSelect, onRefresh }: { patients: Patient[], onSe
             placeholder="搜索姓名、拼音首字母或电话..."
             className="w-full pl-10 pr-4 py-3 text-lg border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent outline-none"
             value={search}
-            onChange={e => setSearch(e.target.value)}
+            onChange={event => setSearch(event.target.value)}
           />
         </div>
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 flex-1 min-h-0 overflow-hidden flex flex-col">
-        <div className="grid grid-cols-[minmax(220px,1.4fr)_minmax(140px,0.9fr)_minmax(120px,0.7fr)_minmax(120px,0.7fr)_56px] bg-slate-50 px-6 py-4 text-sm font-bold uppercase tracking-wider text-slate-500">
+        <div className="grid grid-cols-[minmax(220px,1.35fr)_minmax(135px,0.8fr)_minmax(120px,0.7fr)_minmax(120px,0.75fr)_130px] bg-slate-50 px-6 py-4 text-sm font-bold uppercase tracking-wider text-slate-500">
           <div>姓名</div>
           <div>电话</div>
           <div>性别/年龄</div>
           <div>最近更新</div>
-          <div />
+          <div className="text-right">操作</div>
         </div>
 
-        <div
-          ref={scrollerRef}
-          className="relative flex-1 overflow-auto"
-          onScroll={event => setScrollTop(event.currentTarget.scrollTop)}
-        >
+        <div ref={listScrollerRef} className="flex-1 overflow-auto">
           {error ? (
             <div className="p-10 text-center text-red-500 text-lg">{error}</div>
-          ) : total === 0 && !loading ? (
+          ) : loading ? (
+            <div className="p-10 text-center text-slate-400 text-lg">正在加载患者列表...</div>
+          ) : total === 0 ? (
             <div className="p-10 text-center text-slate-500 text-lg">
               {query ? '未找到匹配的患者。' : '暂无患者数据，请点击右上角新增。'}
             </div>
           ) : (
-            <div className="relative" style={{ height: total * ROW_HEIGHT }}>
-              {visibleRange.indices.map(renderRow)}
-            </div>
+            items.map(renderRow)
           )}
         </div>
+
+        {total > 0 && (
+          <div className="flex items-center justify-between gap-4 border-t border-slate-200 bg-slate-50 px-6 py-3 text-sm text-slate-600">
+            <div>第 {rangeStart}-{rangeEnd} 条，共 {total} 条；每页 30 条</div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="rounded-md border border-slate-200 bg-white px-3 py-2 hover:border-teal-300 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-40"
+                disabled={currentPage === 1 || loading}
+                onClick={() => changePage(1)}
+              >
+                首页
+              </button>
+              <button
+                type="button"
+                aria-label="上一页"
+                className="rounded-md border border-slate-200 bg-white p-2 hover:border-teal-300 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-40"
+                disabled={currentPage === 1 || loading}
+                onClick={() => changePage(currentPage - 1)}
+              >
+                <ChevronLeft size={18} />
+              </button>
+              <span className="min-w-24 text-center font-medium text-slate-700">第 {currentPage} / {totalPages} 页</span>
+              <button
+                type="button"
+                aria-label="下一页"
+                className="rounded-md border border-slate-200 bg-white p-2 hover:border-teal-300 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-40"
+                disabled={currentPage === totalPages || loading}
+                onClick={() => changePage(currentPage + 1)}
+              >
+                <ChevronRight size={18} />
+              </button>
+              <button
+                type="button"
+                className="rounded-md border border-slate-200 bg-white px-3 py-2 hover:border-teal-300 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-40"
+                disabled={currentPage === totalPages || loading}
+                onClick={() => changePage(totalPages)}
+              >
+                末页
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {showAddModal && (
         <AddPatientModal
           patients={clinicService.getAllPatients()}
-          onSelectPatient={(patientId) => {
+          onSelectPatient={patientId => {
             setShowAddModal(false);
             onSelect(patientId);
           }}
           onClose={() => setShowAddModal(false)}
-          onSuccess={() => {
+          onSuccess={async () => {
             setShowAddModal(false);
-            loadedPagesRef.current = new Set();
-            pendingPagesRef.current = new Set();
-            setItemsByIndex({});
-            loadPage(0);
-            onRefresh();
+            await reloadPage(true);
           }}
         />
       )}

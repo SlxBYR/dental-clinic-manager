@@ -18,7 +18,7 @@ export const Dashboard = ({ patients, onViewChange, onPatientClick, onRefresh }:
   const toggleStatus = (e: React.MouseEvent, appt: GlobalAppointment) => {
     e.stopPropagation();
     if (appt.status === 'cancelled') return;
-    const newStatus = appt.status === 'completed' ? 'pending' : 'completed';
+    const newStatus = appt.status === 'pending' ? 'arrived' : 'completed';
     clinicService.updateAppointmentStatus(appt.id, newStatus);
     onRefresh();
   };

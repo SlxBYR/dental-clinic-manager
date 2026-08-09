@@ -43,6 +43,6 @@ export const CLOUD_SYNC_SETTINGS_KEY = 'dental_clinic_cloud_sync_settings_v1';
 export const RELEASE_SETTINGS_KEY = 'dental_clinic_release_settings_v1';
 export const DEFAULT_RELEASE_API_URL = 'https://api.github.com/repos/SlxBYR/dental-clinic-manager/releases/latest';
 // DATA_VERSION 只在 ClinicData 结构变化并需要迁移时递增。
-export const DATA_VERSION = 5;
+export const DATA_VERSION = 7;
 // APP_VERSION 用于界面展示、Release 检测和安装包版本同步。
 export const APP_VERSION = '1.3.0';

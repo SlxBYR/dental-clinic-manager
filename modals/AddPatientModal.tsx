@@ -33,8 +33,7 @@ export const AddPatientModal = ({ patients, onSelectPatient, onClose, onSuccess 
     return patients.filter(patient => patient.phone === phoneQuery);
   }, [patients, phoneQuery]);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  const savePatient = (receiveNow: boolean) => {
     const cleanName = form.name.trim();
     const cleanPhone = form.phone.trim();
 
@@ -42,20 +41,28 @@ export const AddPatientModal = ({ patients, onSelectPatient, onClose, onSuccess 
       setError('姓名是必填项');
       return;
     }
-    const result = clinicService.addPatient({
+    const patient = {
       ...form,
       name: cleanName,
       phone: cleanPhone,
       age: form.age.trim(),
       treatments: [],
       appointments: []
-    });
+    };
+    const result = receiveNow
+      ? clinicService.addPatientAndCheckIn(patient)
+      : clinicService.addPatient(patient);
 
     if (!result.success) {
-      setError('保存患者失败');
+      setError('message' in result ? result.message : '保存患者失败');
       return;
     }
     onSuccess();
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    savePatient(false);
   };
 
   return (
@@ -114,7 +121,8 @@ export const AddPatientModal = ({ patients, onSelectPatient, onClose, onSuccess 
         </div>
         <div className="pt-6 flex justify-end gap-4">
           <Button type="button" variant="secondary" onClick={onClose} size="lg">取消</Button>
-          <Button type="submit" size="lg">保存患者</Button>
+          <Button type="submit" variant="secondary" size="lg">仅保存档案</Button>
+          <Button type="button" onClick={() => savePatient(true)} size="lg">保存并接诊</Button>
         </div>
       </form>
     </ModalBase>

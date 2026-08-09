@@ -83,21 +83,25 @@ export const RagAssistant = ({
     setAiResult(null);
   };
 
-  const handleAddManualEntry = (event: FormEvent) => {
+  const handleAddManualEntry = async (event: FormEvent) => {
     event.preventDefault();
     if (!content.trim()) {
       setStatus({ type: 'error', message: '请填写知识内容。' });
       return;
     }
-    ragService.addKnowledgeEntry({
-      type: 'manual',
-      title,
-      content
-    });
-    setTitle('');
-    setContent('');
-    refreshEntries();
-    setStatus({ type: 'success', message: '知识条目已加入本地库。' });
+    try {
+      await ragService.addKnowledgeEntry({
+        type: 'manual',
+        title,
+        content
+      });
+      setTitle('');
+      setContent('');
+      refreshEntries();
+      setStatus({ type: 'success', message: '知识条目已加入本地库。' });
+    } catch (error) {
+      setStatus({ type: 'error', message: error instanceof Error ? error.message : '知识条目保存失败。' });
+    }
   };
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -110,7 +114,7 @@ export const RagAssistant = ({
         setStatus({ type: 'error', message: '文件内容为空。' });
         return;
       }
-      ragService.addKnowledgeEntry({
+      await ragService.addKnowledgeEntry({
         type: 'file',
         title: file.name,
         content: text,
@@ -125,10 +129,14 @@ export const RagAssistant = ({
     }
   };
 
-  const handleDeleteEntry = (entryId: string) => {
-    ragService.deleteKnowledgeEntry(entryId);
-    refreshEntries();
-    setStatus({ type: 'success', message: '知识条目已删除。' });
+  const handleDeleteEntry = async (entryId: string) => {
+    try {
+      await ragService.deleteKnowledgeEntry(entryId);
+      refreshEntries();
+      setStatus({ type: 'success', message: '知识条目已删除。' });
+    } catch (error) {
+      setStatus({ type: 'error', message: error instanceof Error ? error.message : '知识条目删除失败。' });
+    }
   };
 
   const handleGenerateAiAnswer = async () => {

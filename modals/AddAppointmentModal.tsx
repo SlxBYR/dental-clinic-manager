@@ -3,28 +3,31 @@ import { clinicService } from '../services/clinicService';
 import { Button } from '../components/Button';
 import { formatDateKey } from '../utils/date';
 import { ModalBase } from './ModalBase';
-import { GlobalAppointment, Patient } from '../types';
-import { Search, X } from 'lucide-react';
+import { GlobalAppointment, Patient, VisitType } from '../types';
+import { ChevronDown, Search, X } from 'lucide-react';
+import { TreatmentForm, TreatmentFormSubmitValue } from '../features/treatment/TreatmentForm';
 
 export const AddAppointmentModal = ({
-  phone,
+  patientId,
   defaultName,
   patients = [],
   defaultDate,
+  defaultTime,
   appointment,
   onClose,
   onSuccess
 }: {
-  phone?: string;
+  patientId?: string;
   defaultName?: string;
   patients?: Patient[];
   defaultDate?: string;
+  defaultTime?: string;
   appointment?: GlobalAppointment;
   onClose: () => void;
   onSuccess: () => void;
 }) => {
   const [selectedPatientId, setSelectedPatientId] = useState(
-    appointment?.patientId || phone || ''
+    appointment?.patientId || patientId || ''
   );
   const [query, setQuery] = useState('');
   const [showDropdown, setShowDropdown] = useState(false);
@@ -32,7 +35,11 @@ export const AddAppointmentModal = ({
   const [date, setDate] = useState(
     appointment?.date || defaultDate || formatDateKey(new Date())
   );
-  const [time, setTime] = useState(appointment?.time || '09:00');
+  const [time, setTime] = useState(appointment?.time || defaultTime || '09:00');
+  const [durationMinutes, setDurationMinutes] = useState(appointment?.durationMinutes || 30);
+  const [visitType, setVisitType] = useState<VisitType>(appointment?.visitType || 'follow_up');
+  const [includeTreatment, setIncludeTreatment] = useState(Boolean(appointment?.plannedTreatments.length));
+  const [treatmentValue, setTreatmentValue] = useState<TreatmentFormSubmitValue | null>(null);
   const [error, setError] = useState('');
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -126,8 +133,15 @@ export const AddAppointmentModal = ({
           patientId: selectedPatientId,
           date,
           time,
+          durationMinutes,
+          visitType,
+          plannedTreatments: includeTreatment && treatmentValue?.itemName ? [treatmentValue] : [],
         })
-      : clinicService.addAppointment(selectedPatientId, date, time);
+      : clinicService.addAppointment(selectedPatientId, date, time, {
+          durationMinutes,
+          visitType,
+          plannedTreatments: includeTreatment && treatmentValue?.itemName ? [treatmentValue] : []
+        });
 
     if (!result.success) {
       setError(result.message);
@@ -140,7 +154,7 @@ export const AddAppointmentModal = ({
     <ModalBase
       title={isEditing ? '编辑预约' : '新增预约'}
       onClose={onClose}
-      size="md"
+      size="2xl"
     >
       <form onSubmit={handleSubmit} className="space-y-6">
         {error && (
@@ -155,8 +169,8 @@ export const AddAppointmentModal = ({
             患者姓名
           </label>
 
-          {/* 按电话快捷定位：不可编辑，只展示 */}
-          {phone && !appointment ? (
+          {/* 从患者详情进入时患者已明确，不允许搜索框误切换关联对象。 */}
+          {patientId && !appointment ? (
             <div className="text-lg text-slate-900 font-medium px-4 py-3 bg-slate-50 rounded-lg border border-slate-200">
               {defaultName || selectedPatient?.name || '未命名患者'}
             </div>
@@ -251,7 +265,8 @@ export const AddAppointmentModal = ({
           )}
         </div>
 
-        {/* 日期 & 时间 */}
+        {/* 日期、时间、类型 */}
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
         <div>
           <label className="block text-base font-bold text-slate-700 mb-2">
             预约日期
@@ -281,6 +296,67 @@ export const AddAppointmentModal = ({
             }}
             required
           />
+        </div>
+        <div>
+          <label className="block text-base font-bold text-slate-700 mb-2">预计时长</label>
+          <div className="relative">
+            <select
+              className="w-full appearance-none border border-slate-300 rounded-lg py-3 pl-4 pr-14 text-lg outline-none bg-white"
+              value={durationMinutes}
+              onChange={event => setDurationMinutes(Number(event.target.value))}
+            >
+              {[30, 60, 90, 120].map(value => <option key={value} value={value}>{value} 分钟</option>)}
+            </select>
+            <ChevronDown
+              aria-hidden="true"
+              className="pointer-events-none absolute right-5 top-1/2 -translate-y-1/2 text-slate-700"
+              size={20}
+            />
+          </div>
+        </div>
+        <div>
+          <label className="block text-base font-bold text-slate-700 mb-2">就诊类型</label>
+          <select
+            className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none bg-white"
+            value={visitType}
+            onChange={event => setVisitType(event.target.value as VisitType)}
+          >
+            <option value="initial">初诊</option>
+            <option value="follow_up">复诊</option>
+          </select>
+        </div>
+        </div>
+
+        <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-5">
+          <label className="flex cursor-pointer items-center gap-3 font-bold text-slate-700">
+            <input
+              type="checkbox"
+              checked={includeTreatment}
+              onChange={event => setIncludeTreatment(event.target.checked)}
+              className="h-5 w-5 rounded border-slate-300 text-teal-600"
+            />
+            添加预约处置项目
+          </label>
+          {includeTreatment && (
+            <div className="mt-5 border-t border-slate-200 pt-5">
+              <TreatmentForm
+                catalog={clinicService.getCatalog()}
+                initialValue={appointment?.plannedTreatments[0] ? {
+                  categoryId: appointment.plannedTreatments[0].categoryId,
+                  itemId: appointment.plannedTreatments[0].itemId,
+                  itemName: appointment.plannedTreatments[0].itemName,
+                  price: appointment.plannedTreatments[0].price,
+                  teeth: appointment.plannedTreatments[0].teeth,
+                  note: appointment.plannedTreatments[0].note
+                } : undefined}
+                submitLabel=""
+                onSubmit={() => undefined}
+                onCancel={() => undefined}
+                showActions={false}
+                onChange={setTreatmentValue}
+              />
+            </div>
+          )}
         </div>
 
         <div className="pt-4 flex justify-end gap-4 border-t border-slate-100">

@@ -29,6 +29,8 @@ type TreatmentFormProps = {
   submitLabel: string;
   onSubmit: (value: TreatmentFormSubmitValue) => void;
   onCancel: () => void;
+  showActions?: boolean;
+  onChange?: (value: TreatmentFormSubmitValue) => void;
 };
 
 const findCatalogSelection = (catalog: TreatmentCategory[], initialValue?: TreatmentFormInitialValue) => {
@@ -44,7 +46,7 @@ const findCatalogSelection = (catalog: TreatmentCategory[], initialValue?: Treat
   return { category, item };
 };
 
-export const TreatmentForm = ({ catalog, initialValue, submitLabel, onSubmit, onCancel }: TreatmentFormProps) => {
+export const TreatmentForm = ({ catalog, initialValue, submitLabel, onSubmit, onCancel, showActions = true, onChange }: TreatmentFormProps) => {
   const initialSelection = useMemo(() => findCatalogSelection(catalog, initialValue), [catalog, initialValue]);
   const [selectedCatId, setSelectedCatId] = useState(initialSelection.category?.id || '');
   const [selectedItemId, setSelectedItemId] = useState(initialSelection.item?.id || '');
@@ -93,9 +95,22 @@ export const TreatmentForm = ({ catalog, initialValue, submitLabel, onSubmit, on
 
   const originalPrice = currentItem?.price || 0;
   const canSubmit = Boolean(currentItem || initialValue?.itemName);
+  const currentValue: TreatmentFormSubmitValue = {
+    categoryId: selectedCatId,
+    itemId: currentItem?.id,
+    itemName: currentItem?.name || initialValue?.itemName || '',
+    item: currentItem,
+    price: Number.isFinite(price) ? price : 0,
+    teeth: teeth.trim(),
+    note: note.trim()
+  };
 
-  return (
-    <form onSubmit={handleSubmit} className="space-y-6 min-h-0">
+  useEffect(() => {
+    onChange?.(currentValue);
+  }, [currentValue.categoryId, currentValue.itemId, currentValue.itemName, currentValue.price, currentValue.teeth, currentValue.note, onChange]);
+
+  const fields = (
+    <>
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(320px,1fr)_220px_minmax(260px,0.9fr)] gap-4 lg:gap-6 items-start">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
@@ -151,6 +166,14 @@ export const TreatmentForm = ({ catalog, initialValue, submitLabel, onSubmit, on
         </div>
       </div>
 
+    </>
+  );
+
+  if (!showActions) return <div className="space-y-6 min-h-0">{fields}</div>;
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-6 min-h-0">
+      {fields}
       <div className="pt-2 flex flex-wrap justify-end gap-3">
         <Button type="button" variant="secondary" onClick={onCancel} size="lg">取消</Button>
         <Button type="submit" size="lg" disabled={!canSubmit}>{submitLabel}</Button>

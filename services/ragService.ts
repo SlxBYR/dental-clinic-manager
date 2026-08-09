@@ -1,6 +1,6 @@
-import { Patient, RagChunk, RagIndexStats, RagKnowledgeEntry, RagSearchHit } from '../types';
+import { Patient, RagChunk, RagExternalDocument, RagIndexStats, RagKnowledgeEntry, RagSearchHit } from '../types';
+import { ragStorage, RAG_KNOWLEDGE_STORE_KEY } from './ragStorage';
 
-const RAG_KNOWLEDGE_KEY = 'ragKnowledgeEntries';
 const MAX_CHUNK_LENGTH = 900;
 const CHUNK_OVERLAP = 120;
 
@@ -24,9 +24,14 @@ const createId = (prefix: string) => `${prefix}_${Date.now().toString(36)}_${Mat
 
 const tokenize = (query: string) => {
   const normalized = normalizeText(query);
-  const wordTokens = normalized.match(/[a-z0-9]+|[\u4e00-\u9fff]/g) || [];
-  const phraseTokens = normalized.length >= 2 ? [normalized] : [];
-  return Array.from(new Set([...phraseTokens, ...wordTokens].filter(token => token.length > 0)));
+  const latinTerms = normalized.match(/[a-z0-9]+/g) || [];
+  const chineseTerms = (normalized.match(/[\u4e00-\u9fff]+/g) || [])
+    .flatMap(term => term.length === 1
+      ? [term]
+      : Array.from({ length: term.length - 1 }, (_, index) => term.slice(index, index + 2))
+    );
+  const terms = Array.from(new Set([...latinTerms, ...chineseTerms].filter(Boolean)));
+  return { normalized, terms: terms.length > 0 ? terms : [normalized] };
 };
 
 const splitContent = (content: string) => {
@@ -102,8 +107,14 @@ const buildHighlights = (content: string, tokens: string[]) => {
 };
 
 class RagService {
-  getKnowledgeEntries(): RagKnowledgeEntry[] {
-    const stored = localStorage.getItem(RAG_KNOWLEDGE_KEY);
+  private entries: RagKnowledgeEntry[] = [];
+
+  async initialize() {
+    const stored = await ragStorage.getItem(RAG_KNOWLEDGE_STORE_KEY);
+    this.entries = this.parseKnowledgeEntries(stored);
+  }
+
+  private parseKnowledgeEntries(stored: string | null): RagKnowledgeEntry[] {
     if (!stored) return [];
     try {
       const parsed = JSON.parse(stored);
@@ -120,11 +131,16 @@ class RagService {
     }
   }
 
-  private saveKnowledgeEntries(entries: RagKnowledgeEntry[]) {
-    localStorage.setItem(RAG_KNOWLEDGE_KEY, JSON.stringify(entries));
+  getKnowledgeEntries(): RagKnowledgeEntry[] {
+    return this.entries;
   }
 
-  addKnowledgeEntry(input: AddKnowledgeEntryInput): RagKnowledgeEntry {
+  private async saveKnowledgeEntries(entries: RagKnowledgeEntry[]) {
+    this.entries = entries;
+    await ragStorage.setItem(RAG_KNOWLEDGE_STORE_KEY, JSON.stringify(entries));
+  }
+
+  async addKnowledgeEntry(input: AddKnowledgeEntryInput): Promise<RagKnowledgeEntry> {
     const now = new Date().toISOString();
     const entry: RagKnowledgeEntry = {
       id: createId(input.type),
@@ -148,12 +164,87 @@ class RagService {
         || existing.externalId !== input.externalId
       ))
     ];
-    this.saveKnowledgeEntries(entries);
+    await this.saveKnowledgeEntries(entries);
     return entry;
   }
 
-  deleteKnowledgeEntry(entryId: string) {
-    this.saveKnowledgeEntries(this.getKnowledgeEntries().filter(entry => entry.id !== entryId));
+  async syncExternalDocuments(
+    source: Pick<AddKnowledgeEntryInput, 'externalSourceId' | 'externalSourceName'>,
+    documents: RagExternalDocument[]
+  ) {
+    if (!source.externalSourceId || !source.externalSourceName) {
+      throw new Error('外部数据源缺少标识或名称。');
+    }
+
+    const now = new Date().toISOString();
+    const entries = this.getKnowledgeEntries();
+    const entryIndexes = new Map(entries.map((entry, index) => [
+      `${entry.externalSourceId || ''}:${entry.externalId || ''}`,
+      index
+    ]));
+    let upserted = 0;
+    let markedDeleted = 0;
+
+    documents.forEach(document => {
+      const externalId = document.externalId.trim();
+      if (!externalId) return;
+
+      const key = `${source.externalSourceId}:${externalId}`;
+      const existingIndex = entryIndexes.get(key);
+      const existing = existingIndex === undefined ? undefined : entries[existingIndex];
+
+      if (document.deleted) {
+        if (existing && !existing.isDeleted) {
+          entries[existingIndex as number] = {
+            ...existing,
+            isDeleted: true,
+            updatedAt: document.updatedAt || now
+          };
+          markedDeleted += 1;
+        }
+        return;
+      }
+
+      const content = document.content.trim();
+      const title = document.title.trim();
+      if (!content || !title) return;
+
+      const metadata = {
+        ...(document.updatedAt ? { updatedAt: document.updatedAt } : {}),
+        ...(document.patientMatch?.name ? { patientName: document.patientMatch.name } : {}),
+        ...(document.patientMatch?.phone ? { patientPhone: document.patientMatch.phone } : {}),
+        ...(document.metadata || {})
+      };
+      const nextEntry: RagKnowledgeEntry = {
+        id: existing?.id || createId('external'),
+        type: 'external',
+        title,
+        content,
+        createdAt: existing?.createdAt || now,
+        updatedAt: document.updatedAt || now,
+        externalSourceId: source.externalSourceId,
+        externalSourceName: source.externalSourceName,
+        externalId,
+        metadata,
+        isDeleted: false
+      };
+
+      if (existingIndex === undefined) {
+        entries.unshift(nextEntry);
+        entryIndexes.forEach((index, entryKey) => entryIndexes.set(entryKey, index + 1));
+        entryIndexes.set(key, 0);
+      } else {
+        entries[existingIndex] = nextEntry;
+      }
+      upserted += 1;
+    });
+
+    await this.saveKnowledgeEntries(entries);
+    return { upserted, markedDeleted };
+  }
+
+  async deleteKnowledgeEntry(entryId: string) {
+    await this.saveKnowledgeEntries(this.getKnowledgeEntries().filter(entry => entry.id !== entryId));
   }
 
   buildChunks(patients: Patient[]): RagChunk[] {
@@ -197,7 +288,7 @@ class RagService {
       });
     });
 
-    this.getKnowledgeEntries().forEach(entry => {
+    this.getKnowledgeEntries().filter(entry => !entry.isDeleted).forEach(entry => {
       splitContent(entry.content).forEach((content, index) => {
         chunks.push({
           id: `${entry.id}_${index}`,
@@ -216,7 +307,7 @@ class RagService {
   }
 
   getStats(patients: Patient[]): RagIndexStats {
-    const entries = this.getKnowledgeEntries();
+    const entries = this.getKnowledgeEntries().filter(entry => !entry.isDeleted);
     const patientChunkCount = patients.reduce((total, patient) => (
       total + 1 + patient.treatments.length + patient.appointments.length
     ), 0);
@@ -230,29 +321,42 @@ class RagService {
   }
 
   search(query: string, patients: Patient[], limit = 30): RagSearchHit[] {
-    const tokens = tokenize(query);
-    if (tokens.length === 0) return [];
+    const { normalized: normalizedQuery, terms } = tokenize(query);
+    if (!normalizedQuery) return [];
+    const minimumMatchedTerms = terms.length === 1 ? 1 : Math.ceil(terms.length * 0.6);
+    const isSingleCharacterQuery = normalizedQuery.length === 1;
 
     return this.buildChunks(patients)
       .map(chunk => {
         const normalizedTitle = normalizeText(chunk.title);
         const normalizedContent = normalizeText(chunk.content);
         const normalizedPatient = normalizeText(chunk.patientName || '');
-        const score = tokens.reduce((total, token) => {
+        const searchableContent = isSingleCharacterQuery ? '' : normalizedContent;
+        const matchedTerms = terms.filter(token => (
+          normalizedTitle.includes(token)
+          || normalizedPatient.includes(token)
+          || searchableContent.includes(token)
+        ));
+        const phraseMatched = normalizedTitle.includes(normalizedQuery)
+          || normalizedPatient.includes(normalizedQuery)
+          || searchableContent.includes(normalizedQuery);
+        const tokenScore = matchedTerms.reduce((total, token) => {
           const titleScore = countMatches(normalizedTitle, token) * 8;
           const patientScore = countMatches(normalizedPatient, token) * 6;
-          const contentScore = countMatches(normalizedContent, token) * 2;
+          const contentScore = countMatches(searchableContent, token) * 2;
           return total + titleScore + patientScore + contentScore;
         }, 0);
         return {
           ...chunk,
-          score,
-          highlights: buildHighlights(chunk.content, tokens)
+          score: tokenScore + (phraseMatched ? 18 : 0),
+          highlights: buildHighlights(chunk.content, [normalizedQuery, ...terms]),
+          isRelevant: phraseMatched || matchedTerms.length >= minimumMatchedTerms
         };
       })
-      .filter(hit => hit.score > 0)
+      .filter(hit => hit.score > 0 && hit.isRelevant)
       .sort((a, b) => b.score - a.score || (b.createdAt || '').localeCompare(a.createdAt || ''))
-      .slice(0, limit);
+      .slice(0, limit)
+      .map(({ isRelevant: _isRelevant, ...hit }) => hit);
   }
 }
 

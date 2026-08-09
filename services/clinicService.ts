@@ -1,15 +1,16 @@
-import { ClinicData, Patient, GlobalAppointment, TreatmentCategory, TreatmentItem, AppointmentStatus, BackupSettings, BackupPayload, ReleaseSettings, ReleaseCheckResult, CloudSyncSettings, CloudSyncResult, TreatmentRecord, ImportPreview, ImportPreviewMetric, ImportPreviewResult, PatientListItem, PatientListPage, PatientListQuery } from '../types';
+import { ClinicData, Patient, GlobalAppointment, TreatmentCategory, TreatmentItem, AppointmentStatus, BackupSettings, BackupPayload, ReleaseSettings, ReleaseCheckResult, CloudSyncSettings, CloudSyncResult, TreatmentRecord, ImportPreview, ImportPreviewMetric, ImportPreviewResult, PatientListItem, PatientListPage, PatientListQuery, PatientActivityType, PlannedTreatment, ScheduleSource, VisitType } from '../types';
 import { STORAGE_KEY, BACKUP_SETTINGS_KEY, CLOUD_SYNC_SETTINGS_KEY, RELEASE_SETTINGS_KEY, DEFAULT_CATALOG, DATA_VERSION, APP_VERSION, DEFAULT_RELEASE_API_URL } from '../constants';
 import { createAppointmentId, migrateClinicData, validateClinicData } from './dataMigrations';
 import { ElectronSqliteStore } from './storage/electronSqliteStore';
 import { LocalStorageStore } from './storage/localStorageStore';
 import { CLINIC_DATA_STORE_KEY, KeyValueStore } from './storage/types';
-// @ts-ignore tiny-pinyin 没有完整类型声明，浏览器兜底搜索需要运行时能力。
-import * as pinyin from 'tiny-pinyin';
+import { formatLocalDateTime, getLocalDateKeyFromTimestamp } from '../utils/date';
+import { getPatientPinyinTerms } from '../utils/patientSearch';
 
 const normalizeName = (name: string) => name.trim().replace(/\s+/g, ' ').toLowerCase();
 const normalizePhone = (phone: string) => phone.trim().replace(/\s/g, '');
 const CLOUD_ENCRYPTION_ITERATIONS = 210000;
+const SQLITE_RECOVERY_PENDING_KEY = 'dental_clinic_sqlite_recovery_pending_v1';
 
 type EncryptedCloudPayload = {
   encrypted: true;
@@ -27,6 +28,37 @@ const formatDateKey = (date: Date) => {
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 };
+
+const timeToMinutes = (time: string) => {
+  const [hours, minutes] = time.split(':').map(Number);
+  return (Number.isFinite(hours) ? hours : 0) * 60 + (Number.isFinite(minutes) ? minutes : 0);
+};
+
+type AppointmentInputOptions = {
+  durationMinutes?: number;
+  source?: ScheduleSource;
+  visitType?: VisitType;
+  status?: AppointmentStatus;
+  checkedInAt?: string;
+  plannedTreatments?: Array<Omit<PlannedTreatment, 'id'> & { id?: string }>;
+};
+
+const normalizeDuration = (value?: number) => Math.max(15, Math.min(480, Number(value) || 30));
+
+const normalizePlannedTreatments = (
+  appointmentId: string,
+  items: AppointmentInputOptions['plannedTreatments'] = []
+): PlannedTreatment[] => items
+  .filter(item => item.itemName?.trim())
+  .map((item, index) => ({
+    id: item.id || `plan_${appointmentId}_${index}_${Date.now().toString(36)}`,
+    categoryId: item.categoryId,
+    itemId: item.itemId,
+    itemName: item.itemName.trim(),
+    price: Number.isFinite(item.price) ? item.price : 0,
+    teeth: item.teeth?.trim() || '',
+    note: item.note?.trim() || ''
+  }));
 
 const hashPatientId = (name: string, phone: string) => {
   const source = `${normalizeName(name)}|${normalizePhone(phone)}`;
@@ -158,6 +190,7 @@ const createEmptyData = (): ClinicData => ({
   dataVersion: DATA_VERSION,
   patients: {},
   appointments: {},
+  appointmentDeletionTombstones: {},
   catalog: DEFAULT_CATALOG,
   clinicName: 'DentalClinic'
 });
@@ -172,6 +205,27 @@ const parseAndValidateClinicData = (rawJson: string): ClinicData => {
 };
 
 const flattenAppointments = (data: ClinicData) => Object.values(data.appointments).flat();
+
+const mergeAppointmentDeletionTombstones = (...sources: Array<Record<string, string> | undefined>) => (
+  sources.reduce<Record<string, string>>((merged, source) => {
+    Object.entries(source || {}).forEach(([id, deletedAt]) => {
+      if (!merged[id] || deletedAt > merged[id]) merged[id] = deletedAt;
+    });
+    return merged;
+  }, {})
+);
+
+const applyAppointmentDeletionTombstones = (data: ClinicData) => {
+  const deletedIds = new Set(Object.keys(data.appointmentDeletionTombstones || {}));
+  if (deletedIds.size === 0) return;
+  Object.keys(data.appointments).forEach(dateKey => {
+    data.appointments[dateKey] = data.appointments[dateKey].filter(appointment => !deletedIds.has(appointment.id));
+    if (data.appointments[dateKey].length === 0) delete data.appointments[dateKey];
+  });
+  Object.values(data.patients).forEach(patient => {
+    patient.appointments = patient.appointments.filter(appointment => !deletedIds.has(appointment.id));
+  });
+};
 
 const countTreatments = (data: ClinicData) => Object.values(data.patients)
   .reduce((total, patient) => total + patient.treatments.length, 0);
@@ -193,6 +247,10 @@ const getPatientLastUpdate = (patient: Patient) => {
     const date = appointment.datetime.split(' ')[0];
     if (date > last) last = date;
   });
+  (patient.activityLog || []).forEach(activity => {
+    const date = getLocalDateKeyFromTimestamp(activity.occurredAt);
+    if (date > last) last = date;
+  });
   return last;
 };
 
@@ -210,6 +268,11 @@ const isRecentlyCreatedPatient = (patient: Pick<Patient, 'createdAt'> | PatientL
 };
 
 const comparePatientListItems = (a: PatientListItem, b: PatientListItem, now = Date.now()) => {
+  if (a.isTodayVisit !== b.isTodayVisit) return a.isTodayVisit ? -1 : 1;
+  if (a.isTodayVisit && b.isTodayVisit) {
+    const visitSort = (b.lastVisitAt || '').localeCompare(a.lastVisitAt || '');
+    if (visitSort) return visitSort;
+  }
   const aRecent = isRecentlyCreatedPatient(a, now);
   const bRecent = isRecentlyCreatedPatient(b, now);
   if (aRecent !== bRecent) return aRecent ? -1 : 1;
@@ -219,15 +282,33 @@ const comparePatientListItems = (a: PatientListItem, b: PatientListItem, now = D
   return dateSort || a.name.localeCompare(b.name);
 };
 
-const getPatientPinyinTerms = (name: string) => {
-  if (!pinyin || typeof pinyin.convertToPinyin !== 'function') return '';
-  try {
-    const fullPinyin = pinyin.convertToPinyin(name, ' ', true);
-    const parts = fullPinyin.split(/\s+/).filter(Boolean);
-    return `${fullPinyin} ${parts.join('')} ${parts.map((part: string) => part[0]).join('')}`.toLowerCase();
-  } catch {
-    return '';
-  }
+const isAttendedAppointment = (appointment: GlobalAppointment) => (
+  Boolean(appointment.checkedInAt)
+  && (appointment.status === 'arrived' || appointment.status === 'completed')
+);
+
+const getPatientVisitMetadata = (patient: Patient, appointments: GlobalAppointment[], today: string) => {
+  const appointmentVisits = appointments
+    .filter(appointment => appointment.patientId === patient.id && isAttendedAppointment(appointment))
+    .map(appointment => ({
+      occurredAt: appointment.checkedInAt || '',
+      visitType: appointment.visitType
+    }));
+  const activityVisits = (patient.activityLog || [])
+    .filter(activity => activity.type === 'initial_visit' || activity.type === 'follow_up_visit')
+    .map(activity => ({
+      occurredAt: activity.occurredAt,
+      visitType: activity.type === 'initial_visit' ? 'initial' as const : 'follow_up' as const
+    }));
+  const visits = [...activityVisits, ...appointmentVisits]
+    .sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
+  const latest = visits[0];
+  const todayVisit = visits.find(visit => getLocalDateKeyFromTimestamp(visit.occurredAt) === today);
+  return {
+    isTodayVisit: Boolean(todayVisit),
+    lastVisitAt: latest?.occurredAt,
+    todayVisitType: todayVisit?.visitType
+  };
 };
 
 const createDiffMetric = <T>(
@@ -272,6 +353,7 @@ class ClinicService {
   private sqliteStore: ElectronSqliteStore | null = null;
   private initialized = false;
   private initPromise: Promise<void> | null = null;
+  private saveQueue: Promise<void> = Promise.resolve();
   private storageStatus = {
     primary: 'localStorage',
     message: '正在初始化本地存储。'
@@ -290,6 +372,23 @@ class ClinicService {
       const status = await sqliteStore.getStatus();
       if (status.available) {
         try {
+          if (localStorage.getItem(SQLITE_RECOVERY_PENDING_KEY) === '1') {
+            const recoveryValue = await this.localStore.getItem(CLINIC_DATA_STORE_KEY);
+            if (recoveryValue) {
+              this.data = parseAndValidateClinicData(recoveryValue);
+              this.store = sqliteStore;
+              this.sqliteStore = sqliteStore;
+              this.storageStatus = {
+                primary: 'sqlite',
+                message: '已将 SQLite 写入失败期间的最新备用数据恢复到 SQLite。'
+              };
+              await this.saveDataAsync();
+              this.initialized = true;
+              return;
+            }
+            localStorage.removeItem(SQLITE_RECOVERY_PENDING_KEY);
+          }
+
           const sqliteValue = await sqliteStore.getItem(CLINIC_DATA_STORE_KEY);
           if (sqliteValue) {
             this.data = parseAndValidateClinicData(sqliteValue);
@@ -379,22 +478,29 @@ class ClinicService {
     this.data.version = DATA_VERSION;
     this.data.dataVersion = DATA_VERSION;
     const serialized = JSON.stringify(this.data);
-    if (this.store.name === this.localStore.name) {
-      await this.localStore.setItem(CLINIC_DATA_STORE_KEY, serialized);
-      return;
-    }
-    try {
-      await this.store.setItem(CLINIC_DATA_STORE_KEY, serialized);
-      localStorage.removeItem(STORAGE_KEY);
-    } catch (error) {
-      this.store = this.localStore;
-      this.sqliteStore = null;
-      this.storageStatus = {
-        primary: 'localStorage',
-        message: `SQLite 写入失败，已回退 localStorage：${error instanceof Error ? error.message : String(error)}`
-      };
-      throw error;
-    }
+    const operation = this.saveQueue.then(async () => {
+      if (this.store.name === this.localStore.name) {
+        await this.localStore.setItem(CLINIC_DATA_STORE_KEY, serialized);
+        return;
+      }
+      try {
+        await this.store.setItem(CLINIC_DATA_STORE_KEY, serialized);
+        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(SQLITE_RECOVERY_PENDING_KEY);
+      } catch (error) {
+        this.store = this.localStore;
+        this.sqliteStore = null;
+        this.storageStatus = {
+          primary: 'localStorage',
+          message: `SQLite 写入失败，已回退 localStorage：${error instanceof Error ? error.message : String(error)}`
+        };
+        // 回退不能只切换指针；必须把本次最新快照真正写入备用存储。
+        await this.localStore.setItem(CLINIC_DATA_STORE_KEY, serialized);
+        localStorage.setItem(SQLITE_RECOVERY_PENDING_KEY, '1');
+      }
+    });
+    this.saveQueue = operation.catch(() => undefined);
+    return operation;
   }
 
   saveData() {
@@ -532,6 +638,11 @@ class ClinicService {
 
       // 云端拉取是覆盖式写入，所以必须先迁移并校验完整数据结构。
       const migrated = migrateClinicData(remoteData);
+      migrated.appointmentDeletionTombstones = mergeAppointmentDeletionTombstones(
+        migrated.appointmentDeletionTombstones,
+        this.data.appointmentDeletionTombstones
+      );
+      applyAppointmentDeletionTombstones(migrated);
       const dataValidation = validateClinicData(migrated);
       if (dataValidation.valid === false) {
         return { success: false, message: `云端数据校验失败：${dataValidation.message}` };
@@ -877,8 +988,14 @@ class ClinicService {
 
   private getPatientListPageFromMemory(query: PatientListQuery): PatientListPage {
     const offset = Math.max(0, Number(query.offset) || 0);
-    const limit = Math.min(200, Math.max(1, Number(query.limit) || 80));
+    const limit = Math.min(200, Math.max(1, Number(query.limit) || 30));
     const q = (query.query || '').trim().toLowerCase();
+    const today = query.today || formatDateKey(new Date());
+    const recentStartDate = new Date(`${today}T00:00:00`);
+    recentStartDate.setDate(recentStartDate.getDate() - 6);
+    const recentStart = query.recentStart || formatDateKey(recentStartDate);
+    const scope = query.scope || 'all';
+    const appointments = flattenAppointments(this.data);
     const phoneCounts = Object.values(this.data.patients).reduce<Record<string, number>>((counts, patient) => {
       if (patient.phone) counts[patient.phone] = (counts[patient.phone] || 0) + 1;
       return counts;
@@ -896,17 +1013,31 @@ class ClinicService {
         ].join(' ').toLowerCase();
         return searchText.includes(q);
       })
-      .map<PatientListItem>(patient => ({
-        id: patient.id,
-        createdAt: patient.createdAt,
-        name: patient.name,
-        phone: patient.phone,
-        gender: patient.gender,
-        age: patient.age,
-        lastUpdate: getPatientLastUpdate(patient),
-        phoneCount: patient.phone ? phoneCounts[patient.phone] || 0 : 0
-      }))
-      .sort((a, b) => comparePatientListItems(a, b));
+      .map<PatientListItem>(patient => {
+        const visit = getPatientVisitMetadata(patient, appointments, today);
+        return {
+          id: patient.id,
+          createdAt: patient.createdAt,
+          name: patient.name,
+          phone: patient.phone,
+          gender: patient.gender,
+          age: patient.age,
+          lastUpdate: getPatientLastUpdate(patient),
+          phoneCount: patient.phone ? phoneCounts[patient.phone] || 0 : 0,
+          ...visit
+        };
+      })
+      .filter(patient => {
+        if (scope === 'today') return patient.isTodayVisit;
+        if (scope === 'recent') {
+          const visitDate = getLocalDateKeyFromTimestamp(patient.lastVisitAt);
+          return visitDate >= recentStart && visitDate <= today;
+        }
+        return true;
+      })
+      .sort((a, b) => scope === 'all'
+        ? comparePatientListItems(a, b)
+        : (b.lastVisitAt || '').localeCompare(a.lastVisitAt || '') || a.name.localeCompare(b.name));
 
     return {
       items: items.slice(offset, offset + limit),
@@ -938,6 +1069,23 @@ class ClinicService {
     return Object.values(this.data.patients).find(patient => patient.phone === cleanPhone);
   }
 
+  private recordPatientActivity(
+    patientId: string,
+    type: PatientActivityType,
+    label: string,
+    occurredAt = new Date().toISOString()
+  ) {
+    const patient = this.data.patients[patientId];
+    if (!patient) return;
+    patient.activityLog ||= [];
+    patient.activityLog.unshift({
+      id: `activity_${patientId}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+      type,
+      occurredAt,
+      label
+    });
+  }
+
   addPatient(patient: Omit<Patient, 'id'>): { success: boolean; patientId: string; merged: boolean } {
     const cleanName = patient.name.trim();
     const cleanPhone = normalizePhone(patient.phone);
@@ -951,10 +1099,22 @@ class ClinicService {
       name: cleanName,
       phone: cleanPhone,
       treatments: patient.treatments || [],
-      appointments: patient.appointments || []
+      appointments: patient.appointments || [],
+      activityLog: patient.activityLog || []
     };
+    this.recordPatientActivity(id, 'created', '新增患者', this.data.patients[id].createdAt);
     this.saveData();
     return { success: true, patientId: id, merged: false };
+  }
+
+  addPatientAndCheckIn(patient: Omit<Patient, 'id'>): { success: boolean; patientId: string; merged: boolean; message: string } {
+    const added = this.addPatient(patient);
+    const checkedIn = this.checkInPatient(added.patientId, 'initial');
+    if (!checkedIn.success) {
+      this.deletePatient(added.patientId);
+      return { ...added, success: false, message: checkedIn.message };
+    }
+    return { ...added, message: checkedIn.message };
   }
 
   updatePatient(patientId: string, updates: Partial<Patient>) {
@@ -973,6 +1133,7 @@ class ClinicService {
       id: patientId
     };
     this.syncPatientSnapshots(patientId);
+    this.recordPatientActivity(patientId, 'profile_updated', '修改患者资料');
     this.saveData();
   }
 
@@ -1020,6 +1181,7 @@ class ClinicService {
     };
 
     patient.treatments.push(record);
+    this.recordPatientActivity(patientId, 'treatment_created', `新增处置：${record.item}`, record.createdAt);
     this.saveData();
     return true;
   }
@@ -1062,6 +1224,7 @@ class ClinicService {
             }
           ]
         };
+        this.recordPatientActivity(patientId, 'treatment_updated', `修改处置：${patient.treatments[index].item}`);
         this.saveData();
         return true;
       }
@@ -1072,9 +1235,11 @@ class ClinicService {
   deleteTreatment(patientId: string, recordId: string): boolean {
     const patient = this.data.patients[patientId];
     if (patient) {
+      const deleted = patient.treatments.find(t => t.id === recordId);
       const initialLength = patient.treatments.length;
       patient.treatments = patient.treatments.filter(t => t.id !== recordId);
       if (patient.treatments.length !== initialLength) {
+        this.recordPatientActivity(patientId, 'treatment_deleted', `删除处置：${deleted?.item || '未命名处置'}`);
         this.saveData();
         return true;
       }
@@ -1092,12 +1257,15 @@ class ClinicService {
     return undefined;
   }
 
-  private findAppointmentConflict(date: string, time: string, excludeId?: string): GlobalAppointment | undefined {
-    // 当前尚未建模医生/椅位资源，因此冲突范围是同一天同一时间的未取消预约。
+  private findAppointmentConflict(date: string, time: string, durationMinutes = 30, excludeId?: string): GlobalAppointment | undefined {
+    // 当前尚未建模医生/椅位资源，因此同一时间段只允许一条未取消日程。
+    const start = timeToMinutes(time);
+    const end = start + normalizeDuration(durationMinutes);
     return (this.data.appointments[date] || []).find(appt => (
       appt.id !== excludeId
-      && appt.time === time
       && appt.status !== 'cancelled'
+      && start < timeToMinutes(appt.time) + normalizeDuration(appt.durationMinutes)
+      && end > timeToMinutes(appt.time)
     ));
   }
 
@@ -1109,12 +1277,16 @@ class ClinicService {
     if (snapshot) {
       snapshot.datetime = `${appt.date} ${appt.time}`;
       snapshot.status = appt.status;
+      snapshot.visitType = appt.visitType;
+      snapshot.checkedInAt = appt.checkedInAt;
     } else {
       patient.appointments.push({
         id: appt.id,
         datetime: `${appt.date} ${appt.time}`,
-        created_at: new Date().toISOString().slice(0, 16).replace('T', ' '),
-        status: appt.status
+        created_at: formatLocalDateTime(new Date()),
+        status: appt.status,
+        visitType: appt.visitType,
+        checkedInAt: appt.checkedInAt
       });
     }
     patient.appointments.sort((a, b) => b.datetime.localeCompare(a.datetime));
@@ -1126,11 +1298,17 @@ class ClinicService {
     patient.appointments = patient.appointments.filter(appt => appt.id !== appointmentId);
   }
 
-  addAppointment(patientId: string, date: string, time: string): { success: boolean; message: string; appointmentId?: string } {
+  addAppointment(
+    patientId: string,
+    date: string,
+    time: string,
+    options: AppointmentInputOptions = {}
+  ): { success: boolean; message: string; appointmentId?: string } {
     const patient = this.data.patients[patientId];
     if (!patient) return { success: false, message: '患者不存在，无法创建预约。' };
 
-    const conflict = this.findAppointmentConflict(date, time);
+    const durationMinutes = normalizeDuration(options.durationMinutes);
+    const conflict = this.findAppointmentConflict(date, time, durationMinutes);
     if (conflict) {
       return {
         success: false,
@@ -1149,12 +1327,18 @@ class ClinicService {
       patientId,
       phone: patient.phone,
       name: patient.name,
-      status: 'pending'
+      status: options.status || 'pending',
+      durationMinutes,
+      source: options.source || 'appointment',
+      visitType: options.visitType,
+      checkedInAt: options.checkedInAt,
+      plannedTreatments: normalizePlannedTreatments(id, options.plannedTreatments)
     };
     this.data.appointments[date].push(appt);
     this.data.appointments[date].sort((a, b) => a.time.localeCompare(b.time));
 
     this.syncPatientAppointmentSnapshot(appt);
+    this.recordPatientActivity(patientId, 'appointment_created', `新增预约：${date} ${time}`);
 
     this.saveData();
     return { success: true, message: '预约已创建。', appointmentId: id };
@@ -1162,14 +1346,15 @@ class ClinicService {
 
   updateAppointment(
     appointmentId: string,
-    updates: { patientId: string; date: string; time: string }
+    updates: { patientId: string; date: string; time: string } & AppointmentInputOptions
   ): { success: boolean; message: string } {
     const found = this.findAppointmentById(appointmentId);
     if (!found) return { success: false, message: '预约不存在，可能已被删除。' };
     const patient = this.data.patients[updates.patientId];
     if (!patient) return { success: false, message: '目标患者不存在，无法修改预约。' };
 
-    const conflict = this.findAppointmentConflict(updates.date, updates.time, appointmentId);
+    const durationMinutes = normalizeDuration(updates.durationMinutes ?? found.appointment.durationMinutes);
+    const conflict = this.findAppointmentConflict(updates.date, updates.time, durationMinutes, appointmentId);
     if (conflict) {
       return {
         success: false,
@@ -1183,6 +1368,7 @@ class ClinicService {
 
     if (found.appointment.patientId !== updates.patientId) {
       this.removePatientAppointmentSnapshot(found.appointment.patientId, appointmentId);
+      this.recordPatientActivity(found.appointment.patientId, 'appointment_updated', `预约已调整至其他患者：${updates.date} ${updates.time}`);
     }
 
     const next: GlobalAppointment = {
@@ -1191,13 +1377,20 @@ class ClinicService {
       time: updates.time,
       patientId: updates.patientId,
       phone: patient.phone,
-      name: patient.name
+      name: patient.name,
+      durationMinutes,
+      source: updates.source || found.appointment.source,
+      visitType: updates.visitType,
+      plannedTreatments: updates.plannedTreatments
+        ? normalizePlannedTreatments(appointmentId, updates.plannedTreatments)
+        : found.appointment.plannedTreatments
     };
 
     if (!this.data.appointments[updates.date]) this.data.appointments[updates.date] = [];
     this.data.appointments[updates.date].push(next);
     this.data.appointments[updates.date].sort((a, b) => a.time.localeCompare(b.time));
     this.syncPatientAppointmentSnapshot(next);
+    this.recordPatientActivity(updates.patientId, 'appointment_updated', `修改预约：${updates.date} ${updates.time}`);
     this.saveData();
     return { success: true, message: '预约已更新。' };
   }
@@ -1206,27 +1399,147 @@ class ClinicService {
     const found = this.findAppointmentById(appointmentId);
     if (!found) return { success: false, message: '预约不存在，可能已被删除。' };
     found.appointment.status = status;
+    if ((status === 'arrived' || status === 'completed') && !found.appointment.checkedInAt) {
+      found.appointment.checkedInAt = new Date().toISOString();
+      found.appointment.visitType ||= 'follow_up';
+    }
+    if (status === 'pending') found.appointment.checkedInAt = undefined;
+    if (status === 'completed') this.materializeAppointmentTreatments(found.appointment);
     this.syncPatientAppointmentSnapshot(found.appointment);
+    const statusLabel: Record<AppointmentStatus, string> = {
+      pending: '预约状态改为待诊',
+      arrived: '患者已到诊',
+      completed: '预约已完成',
+      cancelled: '预约已取消'
+    };
+    if (status === 'arrived') {
+      const visitType = found.appointment.visitType === 'initial' ? 'initial_visit' : 'follow_up_visit';
+      this.recordPatientActivity(
+        found.appointment.patientId,
+        visitType,
+        found.appointment.visitType === 'initial' ? '初诊接诊' : '复诊接诊',
+        found.appointment.checkedInAt
+      );
+    } else {
+      this.recordPatientActivity(found.appointment.patientId, 'appointment_status', statusLabel[status]);
+    }
     this.saveData();
     return { success: true, message: '预约状态已更新。' };
+  }
+
+  private materializeAppointmentTreatments(appointment: GlobalAppointment) {
+    const patient = this.data.patients[appointment.patientId];
+    if (!patient) return;
+    appointment.plannedTreatments.forEach((plan, index) => {
+      if (patient.treatments.some(record => record.appointmentId === appointment.id && record.plannedTreatmentId === plan.id)) return;
+      patient.treatments.push({
+        id: `treatment_${Date.now().toString(36)}_${index}`,
+        appointmentId: appointment.id,
+        plannedTreatmentId: plan.id,
+        date: getLocalDateKeyFromTimestamp(appointment.checkedInAt) || appointment.date,
+        createdAt: new Date().toISOString(),
+        categoryId: plan.categoryId,
+        itemId: plan.itemId,
+        item: plan.itemName,
+        price: plan.price,
+        teeth: plan.teeth,
+        note: plan.note,
+        changeLogs: []
+      });
+      this.recordPatientActivity(appointment.patientId, 'treatment_created', `新增处置：${plan.itemName}`);
+    });
+  }
+
+  checkInPatient(patientId: string, visitType: VisitType): { success: boolean; message: string; appointmentId?: string } {
+    const patient = this.data.patients[patientId];
+    if (!patient) return { success: false, message: '患者不存在，无法接诊。' };
+    const now = new Date();
+    const today = formatDateKey(now);
+    const existing = (this.data.appointments[today] || []).find(appt => (
+      appt.patientId === patientId && appt.status !== 'cancelled'
+    ));
+    if (existing) {
+      if (isAttendedAppointment(existing)) {
+        return { success: true, message: '该患者今日已接诊。', appointmentId: existing.id };
+      }
+      existing.status = 'arrived';
+      existing.visitType = visitType;
+      existing.checkedInAt = new Date().toISOString();
+      this.syncPatientAppointmentSnapshot(existing);
+      this.recordPatientActivity(
+        patientId,
+        visitType === 'initial' ? 'initial_visit' : 'follow_up_visit',
+        visitType === 'initial' ? '初诊接诊' : '复诊接诊',
+        existing.checkedInAt
+      );
+      this.saveData();
+      return { success: true, message: '患者已接诊。', appointmentId: existing.id };
+    }
+    const todayVisit = (patient.activityLog || []).find(activity => (
+      (activity.type === 'initial_visit' || activity.type === 'follow_up_visit')
+      && getLocalDateKeyFromTimestamp(activity.occurredAt) === today
+    ));
+    if (todayVisit) return { success: true, message: '该患者今日已接诊。' };
+
+    // 接诊和预约是两类独立事实：患者没有预约时只记录本次就诊，不能隐式生成预约。
+    this.recordPatientActivity(
+      patientId,
+      visitType === 'initial' ? 'initial_visit' : 'follow_up_visit',
+      visitType === 'initial' ? '初诊接诊' : '复诊接诊',
+      now.toISOString()
+    );
+    this.saveData();
+    return {
+      success: true,
+      message: visitType === 'initial' ? '初诊接诊已登记。' : '复诊接诊已登记。'
+    };
   }
 
   cancelAppointment(appointmentId: string): { success: boolean; message: string } {
     return this.updateAppointmentStatus(appointmentId, 'cancelled');
   }
 
-  deleteAppointment(appointmentId: string): { success: boolean; message: string } {
+  async deleteAppointment(appointmentId: string): Promise<{ success: boolean; message: string }> {
     const found = this.findAppointmentById(appointmentId);
     if (!found) return { success: false, message: '预约不存在，可能已被删除。' };
+    const previousDateAppointments = [...this.data.appointments[found.dateKey]];
+    const patient = this.data.patients[found.appointment.patientId];
+    const previousPatientAppointments = patient ? [...patient.appointments] : undefined;
+    const previousPatientActivities = patient ? [...(patient.activityLog || [])] : undefined;
+    const previousDeletedAt = this.data.appointmentDeletionTombstones?.[appointmentId];
     this.data.appointments[found.dateKey] = this.data.appointments[found.dateKey].filter(appt => appt.id !== appointmentId);
     if (this.data.appointments[found.dateKey].length === 0) delete this.data.appointments[found.dateKey];
     this.removePatientAppointmentSnapshot(found.appointment.patientId, appointmentId);
-    this.saveData();
-    return { success: true, message: '预约已删除。' };
+    this.recordPatientActivity(found.appointment.patientId, 'appointment_deleted', `删除预约：${found.appointment.date} ${found.appointment.time}`);
+    this.data.appointmentDeletionTombstones ||= {};
+    this.data.appointmentDeletionTombstones[appointmentId] = new Date().toISOString();
+    try {
+      await this.saveDataAsync();
+      return { success: true, message: '预约已删除。' };
+    } catch (error) {
+      this.data.appointments[found.dateKey] = previousDateAppointments;
+      if (patient && previousPatientAppointments) patient.appointments = previousPatientAppointments;
+      if (patient && previousPatientActivities) patient.activityLog = previousPatientActivities;
+      if (previousDeletedAt) {
+        this.data.appointmentDeletionTombstones[appointmentId] = previousDeletedAt;
+      } else {
+        delete this.data.appointmentDeletionTombstones[appointmentId];
+      }
+      return {
+        success: false,
+        message: `预约删除未能保存，已恢复原记录：${error instanceof Error ? error.message : String(error)}`
+      };
+    }
   }
 
   getAppointmentsByDate(date: string): GlobalAppointment[] {
     return this.data.appointments[date] || [];
+  }
+
+  getAllAppointments(): GlobalAppointment[] {
+    return Object.values(this.data.appointments).flat().sort((a, b) => (
+      a.date === b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date)
+    ));
   }
 
   getAppointmentsByRange(startDate: string, endDate: string): GlobalAppointment[] {

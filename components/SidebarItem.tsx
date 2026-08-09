@@ -1,13 +1,27 @@
 import React from 'react';
 
-export const SidebarItem = ({ icon, label, active, onClick }: { icon: React.ReactNode, label: string, active: boolean, onClick: () => void }) => (
+export const SidebarItem = ({
+  icon,
+  label,
+  active,
+  collapsed = false,
+  onClick
+}: {
+  icon: React.ReactNode;
+  label: string;
+  active: boolean;
+  collapsed?: boolean;
+  onClick: () => void;
+}) => (
   <button
     onClick={onClick}
-    className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${
+    aria-label={label}
+    title={collapsed ? label : undefined}
+    className={`flex w-full items-center rounded-lg py-3 transition-all duration-200 ${collapsed ? 'justify-center px-2' : 'gap-3 px-4'} ${
       active ? 'bg-teal-600 text-white shadow-lg' : 'hover:bg-slate-800 hover:text-white'
     }`}
   >
-    {icon}
-    <span className="font-medium">{label}</span>
+    <span className="shrink-0">{icon}</span>
+    <span className={collapsed ? 'sr-only' : 'font-medium'}>{label}</span>
   </button>
 );

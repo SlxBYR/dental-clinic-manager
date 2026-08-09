@@ -1,5 +1,6 @@
 import { DEFAULT_CATALOG, DATA_VERSION } from '../constants';
-import { Appointment, AppointmentStatus, ClinicData, GlobalAppointment, Patient, TreatmentChangeLog, TreatmentRecord } from '../types';
+import { Appointment, AppointmentStatus, ClinicData, GlobalAppointment, Patient, PatientActivity, PatientActivityType, PlannedTreatment, TreatmentChangeLog, TreatmentRecord, VisitType } from '../types';
+import { formatDateKey, formatLocalDateTime, getLocalDateKeyFromTimestamp } from '../utils/date';
 
 const normalizeName = (name: string) => name.trim().replace(/\s+/g, ' ').toLowerCase();
 const normalizePhone = (phone: string) => phone.trim().replace(/\s/g, '');
@@ -33,10 +34,59 @@ export const createAppointmentId = (date: string, time: string, patientId: strin
   `appt_${sanitizeIdPart(date)}_${sanitizeIdPart(time)}_${sanitizeIdPart(patientId)}_${suffix}`
 );
 
-// 旧数据可能没有状态或状态值不规范，迁移时统一收敛为当前三种状态。
+// 旧数据可能没有状态或状态值不规范，迁移时统一收敛为当前四种状态。
 export const normalizeAppointmentStatus = (status: unknown): AppointmentStatus => {
-  if (status === 'completed' || status === 'cancelled' || status === 'pending') return status;
+  if (status === 'arrived' || status === 'completed' || status === 'cancelled' || status === 'pending') return status;
   return 'pending';
+};
+
+const normalizeVisitType = (value: unknown): VisitType | undefined => (
+  value === 'initial' || value === 'follow_up' ? value : undefined
+);
+
+const PATIENT_ACTIVITY_TYPES = new Set<PatientActivityType>([
+  'created',
+  'profile_updated',
+  'appointment_created',
+  'appointment_updated',
+  'appointment_status',
+  'appointment_deleted',
+  'initial_visit',
+  'follow_up_visit',
+  'treatment_created',
+  'treatment_updated',
+  'treatment_deleted'
+]);
+
+const normalizePatientActivity = (value: any, patientId: string, index: number): PatientActivity | null => {
+  if (!PATIENT_ACTIVITY_TYPES.has(value?.type)) return null;
+  if (typeof value?.occurredAt !== 'string' || !value.occurredAt.trim()) return null;
+  return {
+    id: typeof value?.id === 'string' && value.id.trim()
+      ? value.id
+      : `activity_${sanitizeIdPart(patientId)}_${index}`,
+    type: value.type,
+    occurredAt: value.occurredAt,
+    label: typeof value?.label === 'string' && value.label.trim() ? value.label : '患者信息更新'
+  };
+};
+
+const normalizePlannedTreatment = (value: any, appointmentId: string, index: number): PlannedTreatment | null => {
+  const itemName = typeof value?.itemName === 'string'
+    ? value.itemName.trim()
+    : typeof value?.item === 'string'
+      ? value.item.trim()
+      : '';
+  if (!itemName) return null;
+  return {
+    id: typeof value?.id === 'string' && value.id.trim() ? value.id : `plan_${sanitizeIdPart(appointmentId)}_${index}`,
+    categoryId: typeof value?.categoryId === 'string' ? value.categoryId : undefined,
+    itemId: typeof value?.itemId === 'string' ? value.itemId : undefined,
+    itemName,
+    price: typeof value?.price === 'number' ? value.price : Number(value?.price) || 0,
+    teeth: typeof value?.teeth === 'string' ? value.teeth : '',
+    note: typeof value?.note === 'string' ? value.note : ''
+  };
 };
 
 const normalizeLogValueMap = (value: any): Record<string, string | number | undefined> => {
@@ -74,7 +124,9 @@ const normalizeTreatment = (record: any, index: number): TreatmentRecord => {
   // 处置记录迁移只补齐缺失字段，不推断旧版本没有保存过的业务信息。
   return {
     id,
-    date: typeof record?.date === 'string' && record.date.trim() ? record.date : new Date().toISOString().slice(0, 10),
+    appointmentId: typeof record?.appointmentId === 'string' ? record.appointmentId : undefined,
+    plannedTreatmentId: typeof record?.plannedTreatmentId === 'string' ? record.plannedTreatmentId : undefined,
+    date: typeof record?.date === 'string' && record.date.trim() ? record.date : formatDateKey(new Date()),
     createdAt: typeof record?.createdAt === 'string' ? record.createdAt : undefined,
     categoryId: typeof record?.categoryId === 'string' ? record.categoryId : undefined,
     itemId: typeof record?.itemId === 'string' ? record.itemId : undefined,
@@ -91,24 +143,44 @@ const normalizeTreatment = (record: any, index: number): TreatmentRecord => {
 const makePatientAppointment = (appt: GlobalAppointment, createdAt?: string): Appointment => ({
   id: appt.id,
   datetime: `${appt.date} ${appt.time}`,
-  created_at: createdAt || new Date().toISOString().slice(0, 16).replace('T', ' '),
-  status: appt.status
+  created_at: createdAt || formatLocalDateTime(new Date()),
+  status: appt.status,
+  visitType: appt.visitType,
+  checkedInAt: appt.checkedInAt
 });
+
+const normalizeAppointmentDeletionTombstones = (value: unknown): Record<string, string> => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.entries(value as Record<string, unknown>).reduce<Record<string, string>>((result, [id, deletedAt]) => {
+    if (id.trim() && typeof deletedAt === 'string' && deletedAt.trim()) result[id] = deletedAt;
+    return result;
+  }, {});
+};
 
 // 把各历史版本的数据统一迁到当前 ClinicData 结构，供启动、导入、云同步共用。
 export const migrateClinicData = (raw: any): ClinicData => {
+  const appointmentDeletionTombstones = normalizeAppointmentDeletionTombstones(raw?.appointmentDeletionTombstones);
   const data: ClinicData = {
     version: DATA_VERSION,
     dataVersion: DATA_VERSION,
     clinicName: typeof raw?.clinicName === 'string' && raw.clinicName.trim() ? raw.clinicName : 'DentalClinic',
     catalog: Array.isArray(raw?.catalog) ? raw.catalog : DEFAULT_CATALOG,
     patients: {},
-    appointments: {}
+    appointments: {},
+    appointmentDeletionTombstones
   };
 
   const phoneToIds = new Map<string, string[]>();
   const legacyPatientIdMap = new Map<string, string>();
   const legacyAppointmentsByPatientId = new Map<string, any[]>();
+  const implicitVisitsByPatientId = new Map<string, Array<{
+    appointmentId: string;
+    date: string;
+    time: string;
+    occurredAt: string;
+    visitType: VisitType;
+  }>>();
+  const patientsWithActivityLog = new Set<string>();
   const oldPatients = raw?.patients && typeof raw.patients === 'object' ? raw.patients : {};
 
   // 患者以独立 id 为主键；同手机号只进入同一 patientGroupId，不再合并成同一个人。
@@ -131,8 +203,14 @@ export const migrateClinicData = (raw: any): ClinicData => {
       gender: typeof oldPatient.gender === 'string' ? oldPatient.gender : '男',
       age: oldPatient.age !== undefined ? String(oldPatient.age) : '',
       treatments: Array.isArray(oldPatient.treatments) ? oldPatient.treatments.map(normalizeTreatment) : [],
-      appointments: []
+      appointments: [],
+      activityLog: Array.isArray(oldPatient.activityLog)
+        ? oldPatient.activityLog
+          .map((activity: any, index: number) => normalizePatientActivity(activity, id, index))
+          .filter(Boolean) as PatientActivity[]
+        : []
     };
+    if (Array.isArray(oldPatient.activityLog)) patientsWithActivityLog.add(id);
 
     legacyPatientIdMap.set(oldKey, id);
     if (oldPatient.id) legacyPatientIdMap.set(oldPatient.id, id);
@@ -164,7 +242,28 @@ export const migrateClinicData = (raw: any): ClinicData => {
           id = `${baseId}_${dedupeIndex}`;
           dedupeIndex += 1;
         }
+        if (appointmentDeletionTombstones[id]) return null;
         usedAppointmentIds.add(id);
+
+        // 旧版“接诊”会隐式生成 source=walk_in 的预约。它不是用户设置的预约，迁移时
+        // 转回就诊活动并写入删除标记，避免本地或云端数据再次把这条误记录带回来。
+        if (appt?.source === 'walk_in') {
+          const checkedInAt = typeof appt?.checkedInAt === 'string' && appt.checkedInAt.trim()
+            ? appt.checkedInAt
+            : `${date}T${time}:00`;
+          appointmentDeletionTombstones[id] ||= new Date().toISOString();
+          implicitVisitsByPatientId.set(patientId, [
+            ...(implicitVisitsByPatientId.get(patientId) || []),
+            {
+              appointmentId: id,
+              date,
+              time,
+              occurredAt: checkedInAt,
+              visitType: normalizeVisitType(appt?.visitType) || 'follow_up'
+            }
+          ]);
+          return null;
+        }
 
         return {
           ...appt,
@@ -174,7 +273,16 @@ export const migrateClinicData = (raw: any): ClinicData => {
           patientId,
           phone: patient.phone,
           name: patient.name,
-          status: normalizeAppointmentStatus(appt?.status)
+          status: normalizeAppointmentStatus(appt?.status),
+          durationMinutes: Number.isFinite(Number(appt?.durationMinutes))
+            ? Math.max(15, Math.min(480, Number(appt.durationMinutes)))
+            : 30,
+          source: appt?.source === 'walk_in' ? 'walk_in' : 'appointment',
+          visitType: normalizeVisitType(appt?.visitType),
+          checkedInAt: typeof appt?.checkedInAt === 'string' && appt.checkedInAt.trim() ? appt.checkedInAt : undefined,
+          plannedTreatments: (Array.isArray(appt?.plannedTreatments) ? appt.plannedTreatments : [])
+            .map((item: any, itemIndex: number) => normalizePlannedTreatment(item, id, itemIndex))
+            .filter(Boolean) as PlannedTreatment[]
         } as GlobalAppointment;
       })
       .filter(Boolean) as GlobalAppointment[];
@@ -207,16 +315,92 @@ export const migrateClinicData = (raw: any): ClinicData => {
       const id = typeof item.id === 'string' && item.id.trim()
         ? item.id
         : `legacy_${sanitizeIdPart(patient.id)}_${sanitizeIdPart(item.datetime)}_${index}`;
+      if (appointmentDeletionTombstones[id]) return;
       if (!snapshotsById.has(id)) {
         snapshotsById.set(id, {
           id,
           datetime: item.datetime,
           created_at: typeof item.created_at === 'string' ? item.created_at : '',
-          status: normalizeAppointmentStatus(item.status)
+          status: normalizeAppointmentStatus(item.status),
+          visitType: normalizeVisitType(item.visitType),
+          checkedInAt: typeof item.checkedInAt === 'string' ? item.checkedInAt : undefined
         });
       }
     });
     patient.appointments = Array.from(snapshotsById.values()).sort((a, b) => b.datetime.localeCompare(a.datetime));
+  });
+
+  // 旧版本没有活动日志时，从已有患者、预约和处置时间回填，确保月历首次启用即可查看历史更新。
+  Object.values(data.patients).forEach(patient => {
+    if (patientsWithActivityLog.has(patient.id)) {
+      patient.activityLog = (patient.activityLog || []).sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
+      return;
+    }
+    const activities: PatientActivity[] = [];
+    const addActivity = (id: string, type: PatientActivityType, occurredAt: string | undefined, label: string) => {
+      if (!occurredAt) return;
+      activities.push({ id, type, occurredAt, label });
+    };
+    addActivity(`activity_${patient.id}_created`, 'created', patient.createdAt, '新增患者');
+    patient.treatments.forEach(treatment => {
+      addActivity(
+        `activity_${patient.id}_treatment_${treatment.id}`,
+        'treatment_created',
+        treatment.createdAt || (treatment.date ? `${treatment.date}T12:00:00` : undefined),
+        `新增处置：${treatment.item}`
+      );
+      treatment.changeLogs.forEach(log => {
+        addActivity(
+          `activity_${patient.id}_treatment_log_${log.id}`,
+          'treatment_updated',
+          log.changedAt,
+          `修改处置：${treatment.item}`
+        );
+      });
+    });
+    patient.appointments.forEach(appointment => {
+      addActivity(
+        `activity_${patient.id}_appointment_${appointment.id}`,
+        'appointment_created',
+        appointment.created_at || (appointment.datetime ? appointment.datetime.replace(' ', 'T') : undefined),
+        `新增预约：${appointment.datetime}`
+      );
+      if (appointment.checkedInAt) {
+        const type = appointment.visitType === 'initial' ? 'initial_visit' : 'follow_up_visit';
+        addActivity(
+          `activity_${patient.id}_visit_${appointment.id}`,
+          type,
+          appointment.checkedInAt,
+          appointment.visitType === 'initial' ? '初诊接诊' : '复诊接诊'
+        );
+      }
+    });
+    patient.activityLog = activities.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
+  });
+
+  // 清除隐式预约留下的“新增预约”活动，同时保留真实的初诊/复诊事实。
+  Object.values(data.patients).forEach(patient => {
+    const implicitVisits = implicitVisitsByPatientId.get(patient.id) || [];
+    if (implicitVisits.length === 0) return;
+    patient.activityLog = (patient.activityLog || []).filter(activity => !(
+      activity.type === 'appointment_created'
+      && implicitVisits.some(visit => activity.label === `新增预约：${visit.date} ${visit.time}`)
+    ));
+    implicitVisits.forEach(visit => {
+      const activityType = visit.visitType === 'initial' ? 'initial_visit' : 'follow_up_visit';
+      const hasVisit = patient.activityLog?.some(activity => (
+        activity.type === activityType
+        && getLocalDateKeyFromTimestamp(activity.occurredAt) === visit.date
+      ));
+      if (hasVisit) return;
+      patient.activityLog?.push({
+        id: `activity_${sanitizeIdPart(patient.id)}_visit_${sanitizeIdPart(visit.appointmentId)}`,
+        type: activityType,
+        occurredAt: visit.occurredAt,
+        label: visit.visitType === 'initial' ? '初诊接诊' : '复诊接诊'
+      });
+    });
+    patient.activityLog?.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
   });
 
   return data;
@@ -231,6 +415,16 @@ export const validateClinicData = (data: ClinicData): { valid: true } | { valid:
   if (!data.appointments || typeof data.appointments !== 'object' || Array.isArray(data.appointments)) {
     return { valid: false, message: '预约列表格式不正确，应按日期分组保存。' };
   }
+  if (
+    data.appointmentDeletionTombstones !== undefined
+    && (
+      typeof data.appointmentDeletionTombstones !== 'object'
+      || Array.isArray(data.appointmentDeletionTombstones)
+      || Object.entries(data.appointmentDeletionTombstones).some(([id, deletedAt]) => !id.trim() || typeof deletedAt !== 'string' || !deletedAt.trim())
+    )
+  ) {
+    return { valid: false, message: '预约删除记录格式不正确。' };
+  }
 
   for (const [patientId, patient] of Object.entries(data.patients)) {
     if (!patient.id || patient.id !== patientId) return { valid: false, message: `患者 ${patientId} 缺少有效 id。` };
@@ -238,6 +432,13 @@ export const validateClinicData = (data: ClinicData): { valid: true } | { valid:
     if (typeof patient.phone !== 'string') return { valid: false, message: `患者 ${patient.name} 的电话字段类型不正确。` };
     if (!Array.isArray(patient.treatments)) return { valid: false, message: `患者 ${patient.name} 的处置记录格式不正确。` };
     if (!Array.isArray(patient.appointments)) return { valid: false, message: `患者 ${patient.name} 的预约历史格式不正确。` };
+    if (!Array.isArray(patient.activityLog)) return { valid: false, message: `患者 ${patient.name} 的更新记录格式不正确。` };
+    for (const activity of patient.activityLog) {
+      if (typeof activity.id !== 'string' || !activity.id.trim()) return { valid: false, message: `患者 ${patient.name} 存在缺少 id 的更新记录。` };
+      if (!PATIENT_ACTIVITY_TYPES.has(activity.type)) return { valid: false, message: `患者 ${patient.name} 存在未知的更新记录类型。` };
+      if (typeof activity.occurredAt !== 'string' || !activity.occurredAt.trim()) return { valid: false, message: `患者 ${patient.name} 存在缺少时间的更新记录。` };
+      if (typeof activity.label !== 'string' || !activity.label.trim()) return { valid: false, message: `患者 ${patient.name} 存在缺少说明的更新记录。` };
+    }
     for (const treatment of patient.treatments) {
       if (typeof treatment.id !== 'string' || !treatment.id) return { valid: false, message: `患者 ${patient.name} 存在缺少 id 的处置记录。` };
       if (typeof treatment.date !== 'string' || !treatment.date) return { valid: false, message: `患者 ${patient.name} 存在缺少日期的处置记录。` };
@@ -270,7 +471,11 @@ export const validateClinicData = (data: ClinicData): { valid: true } | { valid:
       if (typeof appt.date !== 'string' || !appt.date) return { valid: false, message: `预约 ${appt.id} 缺少日期。` };
       if (typeof appt.time !== 'string' || !appt.time) return { valid: false, message: `预约 ${appt.id} 缺少时间。` };
       if (typeof appt.patientId !== 'string' || !data.patients[appt.patientId]) return { valid: false, message: `预约 ${appt.id} 关联的患者不存在。` };
-      if (!['pending', 'completed', 'cancelled'].includes(appt.status)) return { valid: false, message: `预约 ${appt.id} 的状态不合法。` };
+      if (!['pending', 'arrived', 'completed', 'cancelled'].includes(appt.status)) return { valid: false, message: `预约 ${appt.id} 的状态不合法。` };
+      if (!Number.isFinite(appt.durationMinutes) || appt.durationMinutes < 15) return { valid: false, message: `预约 ${appt.id} 的时长不合法。` };
+      if (!['appointment', 'walk_in'].includes(appt.source)) return { valid: false, message: `预约 ${appt.id} 的来源不合法。` };
+      if (appt.visitType && !['initial', 'follow_up'].includes(appt.visitType)) return { valid: false, message: `预约 ${appt.id} 的接诊类型不合法。` };
+      if (!Array.isArray(appt.plannedTreatments)) return { valid: false, message: `预约 ${appt.id} 的处置计划格式不正确。` };
     }
   }
 

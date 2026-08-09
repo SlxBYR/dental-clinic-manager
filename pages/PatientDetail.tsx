@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Calendar, Edit2, History, Phone, Save, Stethoscope, Trash2 } from 'lucide-react';
+import { Calendar, Edit2, History, Phone, Save, Stethoscope, Trash2, UserCheck } from 'lucide-react';
 import { clinicService } from '../services/clinicService';
 import { Patient, TreatmentRecord } from '../types';
 import { Button } from '../components/Button';
@@ -90,6 +90,17 @@ export const PatientDetail = ({ patient, onBack, onRefresh }: { patient: Patient
            </Button>
            <Button onClick={() => setShowAppointmentModal(true)} variant="secondary" size="md">
              <Calendar size={18} className="mr-2" /> 新增预约
+           </Button>
+           <Button
+             onClick={() => {
+               const result = clinicService.checkInPatient(patient.id, 'follow_up');
+               if (!result.success) window.alert(result.message);
+               onRefresh();
+             }}
+             variant="secondary"
+             size="md"
+           >
+             <UserCheck size={18} className="mr-2" /> 标记复诊
            </Button>
            <Button onClick={() => setShowTreatmentModal(true)} size="md">
              <Stethoscope size={18} className="mr-2" /> 新增处置
@@ -277,7 +288,7 @@ export const PatientDetail = ({ patient, onBack, onRefresh }: { patient: Patient
 
       {showAppointmentModal && (
         <AddAppointmentModal
-          phone={patient.id}
+          patientId={patient.id}
           defaultName={patient.name}
           onClose={() => setShowAppointmentModal(false)}
           onSuccess={() => { setShowAppointmentModal(false); onRefresh(); }}

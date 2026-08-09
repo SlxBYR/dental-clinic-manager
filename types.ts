@@ -21,6 +21,8 @@ export interface TreatmentChangeLog {
 
 export interface TreatmentRecord {
   id: string;
+  appointmentId?: string; // 来源预约；用于把预约处置计划幂等地转成正式处置。
+  plannedTreatmentId?: string;
   date: string;
   createdAt?: string;
   categoryId?: string;
@@ -37,6 +39,28 @@ export interface Appointment {
   datetime: string; // Format: YYYY-MM-DD HH:mm
   created_at: string;
   status?: AppointmentStatus;
+  visitType?: VisitType;
+  checkedInAt?: string;
+}
+
+export type PatientActivityType =
+  | 'created'
+  | 'profile_updated'
+  | 'appointment_created'
+  | 'appointment_updated'
+  | 'appointment_status'
+  | 'appointment_deleted'
+  | 'initial_visit'
+  | 'follow_up_visit'
+  | 'treatment_created'
+  | 'treatment_updated'
+  | 'treatment_deleted';
+
+export interface PatientActivity {
+  id: string;
+  type: PatientActivityType;
+  occurredAt: string;
+  label: string;
 }
 
 export interface Patient {
@@ -50,6 +74,7 @@ export interface Patient {
   social?: string; // Legacy field preserved during migration/export, no longer shown in UI
   treatments: TreatmentRecord[];
   appointments: Appointment[];
+  activityLog?: PatientActivity[];
 }
 
 export interface PatientListItem {
@@ -61,10 +86,18 @@ export interface PatientListItem {
   age: string;
   lastUpdate: string;
   phoneCount: number;
+  isTodayVisit: boolean;
+  lastVisitAt?: string;
+  todayVisitType?: VisitType;
 }
+
+export type PatientListScope = 'today' | 'recent' | 'all';
 
 export interface PatientListQuery {
   query?: string;
+  scope?: PatientListScope;
+  today?: string;
+  recentStart?: string;
   offset: number;
   limit: number;
 }
@@ -76,7 +109,19 @@ export interface PatientListPage {
   limit: number;
 }
 
-export type AppointmentStatus = 'pending' | 'completed' | 'cancelled';
+export type AppointmentStatus = 'pending' | 'arrived' | 'completed' | 'cancelled';
+export type VisitType = 'initial' | 'follow_up';
+export type ScheduleSource = 'appointment' | 'walk_in';
+
+export interface PlannedTreatment {
+  id: string;
+  categoryId?: string;
+  itemId?: string;
+  itemName: string;
+  price: number;
+  teeth: string;
+  note: string;
+}
 
 export interface GlobalAppointment {
   id: string;
@@ -86,6 +131,11 @@ export interface GlobalAppointment {
   phone: string;
   name: string;
   status: AppointmentStatus;
+  durationMinutes: number;
+  source: ScheduleSource;
+  visitType?: VisitType;
+  checkedInAt?: string;
+  plannedTreatments: PlannedTreatment[];
 }
 
 // Data structure for persistence
@@ -95,6 +145,7 @@ export interface ClinicData {
   clinicName?: string; // Customizable title
   patients: Record<string, Patient>;
   appointments: Record<string, GlobalAppointment[]>;
+  appointmentDeletionTombstones?: Record<string, string>; // appointment id -> deleted-at ISO timestamp
   catalog: TreatmentCategory[];
 }
 
@@ -179,6 +230,8 @@ export interface RagKnowledgeEntry {
   externalSourceName?: string;
   externalId?: string;
   metadata?: Record<string, string | number | boolean>;
+  // 外部源删除时保留审计记录，但不再参与检索。
+  isDeleted?: boolean;
 }
 
 export interface RagChunk {
@@ -215,6 +268,7 @@ export interface AiSettings {
   baseUrl: string;
   apiKey: string;
   model: string;
+  systemPrompt: string;
   sendPatientInfo: boolean;
   redactionMode: AiRedactionMode;
   maxContextChunks: number;

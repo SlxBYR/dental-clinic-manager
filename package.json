@@ -9,9 +9,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "electron": "concurrently \"npm run dev\" \"wait-on http://localhost:3000 && cross-env ELECTRON_START_URL=http://localhost:3000 electron .\"",
-    "electron:build": "npm run build && electron-builder --win --mac",
-    "electron:build:fresh-win": "npm run build && electron-builder --win nsis --x64 --config electron-builder.fresh.cjs",
-    "windows:uninstall-helper": "scripts/windows-uninstall-dentalsystem.cmd"
+    "electron:build": "npm run build && electron-builder --win nsis --x64 --publish never",
+    "windows:uninstall-helper": "scripts/UniDental.cmd"
   },
   "dependencies": {
     "lucide-react": "^0.562.0",
@@ -36,6 +35,13 @@
   "build": {
     "appId": "com.dental.clinic",
     "productName": "DentalSystem",
+    "asar": true,
+    "files": [
+      "dist/**/*",
+      "electron-main.js",
+      "preload.cjs",
+      "package.json"
+    ],
     "nsis": {
       "oneClick": true,
       "allowToChangeInstallationDirectory": false,
@@ -49,10 +55,7 @@
       "output": "release"
     },
     "win": {
-      "target": [
-        "nsis",
-        "portable"
-      ],
+      "target": "nsis",
       "icon": "build/icon.ico"
     },
     "mac": {

@@ -3,6 +3,9 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import './index.css';
 import { clinicService } from './services/clinicService';
+import { aiService } from './services/aiService';
+import { externalRagSourceService } from './services/externalRagSourceService';
+import { ragService } from './services/ragService';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
@@ -17,7 +20,12 @@ root.render(
   </div>
 );
 
-clinicService.initialize().finally(() => {
+Promise.all([
+  clinicService.initialize(),
+  ragService.initialize(),
+  aiService.initialize(),
+  externalRagSourceService.initialize()
+]).finally(() => {
   root.render(
     <React.StrictMode>
       <App />

@@ -5,6 +5,16 @@ export const formatDateKey = (date: Date) => {
   return `${year}-${month}-${day}`;
 };
 
+export const formatLocalDateTime = (date: Date) => (
+  `${formatDateKey(date)} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+);
+
+export const getLocalDateKeyFromTimestamp = (value?: string) => {
+  if (!value) return '';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value.slice(0, 10) : formatDateKey(date);
+};
+
 export const addDays = (date: Date, days: number) => {
   const next = new Date(date);
   next.setDate(date.getDate() + days);

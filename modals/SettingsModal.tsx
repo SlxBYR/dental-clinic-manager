@@ -120,10 +120,14 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
     setIsCheckingRelease(false);
   };
 
-  const handleSaveAiSettings = () => {
-    aiService.updateSettings(aiSettings);
-    setAiSettings(aiService.getSettings());
-    setAiStatus({ type: 'success', message: aiSettings.enabled ? 'AI 设置已保存。' : 'AI 已保持关闭。' });
+  const handleSaveAiSettings = async () => {
+    try {
+      await aiService.updateSettings(aiSettings);
+      setAiSettings(aiService.getSettings());
+      setAiStatus({ type: 'success', message: aiSettings.enabled ? 'AI 设置已保存。' : 'AI 已保持关闭。' });
+    } catch (error) {
+      setAiStatus({ type: 'error', message: error instanceof Error ? error.message : 'AI 设置保存失败。' });
+    }
   };
 
   const updateExternalSource = (sourceId: string, updates: Partial<RagExternalSourceConfig>) => {
@@ -140,8 +144,8 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
     setExternalSources(prev => [source, ...prev]);
   };
 
-  const saveExternalSource = (source: RagExternalSourceConfig) => {
-    const saved = externalRagSourceService.upsertSource(source);
+  const saveExternalSource = async (source: RagExternalSourceConfig) => {
+    const saved = await externalRagSourceService.upsertSource(source);
     setExternalSources(externalRagSourceService.getSources());
     setExternalStatus(prev => ({
       ...prev,
@@ -149,14 +153,14 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
     }));
   };
 
-  const deleteExternalSource = (sourceId: string) => {
+  const deleteExternalSource = async (sourceId: string) => {
     if (!confirm('确定删除这个外部数据源配置吗？已同步的 RAG 条目不会自动删除。')) return;
-    externalRagSourceService.deleteSource(sourceId);
+    await externalRagSourceService.deleteSource(sourceId);
     setExternalSources(externalRagSourceService.getSources());
   };
 
   const testExternalSource = async (source: RagExternalSourceConfig) => {
-    const saved = externalRagSourceService.upsertSource(source);
+    const saved = await externalRagSourceService.upsertSource(source);
     setExternalSources(externalRagSourceService.getSources());
     setSyncingExternalSourceId(saved.id);
     const result = await externalRagSourceService.testConnection(saved);
@@ -170,7 +174,7 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
   };
 
   const syncExternalSource = async (source: RagExternalSourceConfig) => {
-    const saved = externalRagSourceService.upsertSource(source);
+    const saved = await externalRagSourceService.upsertSource(source);
     setExternalSources(externalRagSourceService.getSources());
     setSyncingExternalSourceId(saved.id);
     const result = await externalRagSourceService.syncSource(saved);
@@ -180,6 +184,7 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
       ...prev,
       [saved.id]: { type: result.success ? 'success' : 'error', message: result.message }
     }));
+    if (result.success) onRefresh();
     setSyncingExternalSourceId(null);
   };
 
@@ -639,6 +644,25 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
                     setAiStatus(null);
                   }}
                 />
+              </div>
+
+              <div>
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <label className="block text-slate-600 font-medium">System Prompt</label>
+                  <span className="text-xs text-slate-400">{aiSettings.systemPrompt.length}/4000</span>
+                </div>
+                <textarea
+                  className="min-h-36 w-full resize-y rounded-lg border border-slate-300 px-4 py-3 text-base leading-6 outline-none focus:ring-2 focus:ring-teal-500"
+                  maxLength={4000}
+                  value={aiSettings.systemPrompt}
+                  onChange={e => {
+                    setAiSettings({ ...aiSettings, systemPrompt: e.target.value });
+                    setAiStatus(null);
+                  }}
+                />
+                <p className="mt-2 text-sm leading-6 text-slate-500">
+                  用于定义回答的角色、语气和格式。系统会始终附加引用、无依据不回答和非诊断等安全约束。
+                </p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

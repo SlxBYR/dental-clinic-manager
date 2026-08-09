@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { BarChart3, BellRing, Calendar, Database, LayoutDashboard, Settings, Users } from 'lucide-react';
+import { BarChart3, BellRing, Calendar, CalendarDays, Database, LayoutDashboard, PanelLeftClose, PanelLeftOpen, Settings, Users } from 'lucide-react';
 import { APP_VERSION } from './constants';
 import { SidebarItem } from './components/SidebarItem';
 import { SettingsModal } from './modals/SettingsModal';
 import { Dashboard } from './pages/Dashboard';
+import { PatientCalendar } from './pages/PatientCalendar';
 import { PatientDetail } from './pages/PatientDetail';
 import { PatientList } from './pages/PatientList';
 import { RagAssistant } from './pages/RagAssistant';
@@ -14,6 +15,7 @@ import { View } from './appTypes';
 import { Patient } from './types';
 
 const AGE_REVIEW_DECISION_KEY_PREFIX = 'ageReviewDecision';
+const SIDEBAR_COLLAPSED_KEY = 'dentalSidebarCollapsed';
 
 const getAgeReviewDecisionKey = (year: number) => `${AGE_REVIEW_DECISION_KEY_PREFIX}_${year}`;
 
@@ -27,6 +29,7 @@ export default function App() {
   const [clinicName, setClinicName] = useState('DentalClinic');
   const [refreshKey, setRefreshKey] = useState(0);
   const [ageReviewDecisionYear, setAgeReviewDecisionYear] = useState<number | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1');
   const today = new Date();
   const currentYear = today.getFullYear();
   const shouldShowAgeReviewNotice = isAgeReviewDay(today)
@@ -48,6 +51,10 @@ export default function App() {
       setSelectedPatientId(null);
     }
   }, [selectedPatientId, refreshKey]);
+
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? '1' : '0');
+  }, [sidebarCollapsed]);
 
   const refreshData = () => {
     setRefreshKey(prev => prev + 1);
@@ -87,6 +94,8 @@ export default function App() {
         return <Dashboard onViewChange={setCurrentView} patients={patients} onPatientClick={handlePatientClick} onRefresh={refreshData} />;
       case 'patients':
         return <PatientList patients={patients} onSelect={handlePatientClick} onRefresh={refreshData} />;
+      case 'calendar':
+        return <PatientCalendar patients={patients} onPatientClick={handlePatientClick} />;
       case 'schedule':
         return <ScheduleManager patients={patients} onRefresh={refreshData} onPatientClick={handlePatientClick} />;
       case 'reports':
@@ -100,61 +109,87 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-slate-50 overflow-hidden font-sans text-slate-900 relative">
-      <aside className="w-64 bg-slate-900 text-slate-300 flex flex-col shadow-xl flex-shrink-0 relative">
-        <div className="p-4 border-b border-slate-800">
-          <div className="flex items-center gap-3 min-w-0">
+      <aside className={`${sidebarCollapsed ? 'w-20' : 'w-64'} relative z-20 flex flex-shrink-0 flex-col bg-slate-900 text-slate-300 shadow-xl transition-[width] duration-300`}>
+        <div className={`${sidebarCollapsed ? 'p-3' : 'p-4'} border-b border-slate-800`}>
+          <div className={`flex min-w-0 items-center ${sidebarCollapsed ? 'justify-center' : 'gap-3'}`}>
             <img src="./app-icon.png" alt="" className="h-11 w-11 rounded-xl bg-white object-cover shadow-sm flex-shrink-0" />
-            <div className="min-w-0 flex-1">
+            {!sidebarCollapsed && <div className="min-w-0 flex-1">
               <div className="font-bold text-lg leading-tight text-white truncate">{clinicName}</div>
-              <div className="mt-1 flex items-center justify-between gap-2">
-                <span className="text-xs text-slate-500 font-mono">v{APP_VERSION}</span>
-                <button
-                  onClick={() => setShowSettings(true)}
-                  className="text-slate-400 hover:text-white transition-colors p-1.5 rounded-md hover:bg-slate-800"
-                  aria-label="系统设置"
-                >
-                  <Settings size={17} />
-                </button>
-              </div>
-            </div>
+              <div className="mt-1 text-xs font-mono text-slate-500">v{APP_VERSION}</div>
+            </div>}
           </div>
         </div>
 
-        <nav className="flex-1 p-4 space-y-2">
+        <button
+          type="button"
+          aria-label={sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}
+          title={sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}
+          onClick={() => setSidebarCollapsed(value => !value)}
+          className="absolute -right-3 top-[72px] z-30 flex h-7 w-7 items-center justify-center rounded-full border border-slate-700 bg-slate-900 text-slate-300 shadow-md transition-colors hover:bg-teal-600 hover:text-white"
+        >
+          {sidebarCollapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
+        </button>
+
+        <nav className={`${sidebarCollapsed ? 'p-2' : 'p-4'} flex-1 space-y-2`}>
           <SidebarItem
             icon={<LayoutDashboard size={20} />}
             label="总览"
+            collapsed={sidebarCollapsed}
             active={currentView === 'dashboard' && !selectedPatientId}
             onClick={() => { setSelectedPatientId(null); setCurrentView('dashboard'); }}
           />
           <SidebarItem
             icon={<Users size={20} />}
             label="患者管理"
+            collapsed={sidebarCollapsed}
             active={currentView === 'patients'}
             onClick={() => { setSelectedPatientId(null); setCurrentView('patients'); }}
           />
           <SidebarItem
+            icon={<CalendarDays size={20} />}
+            label="日历"
+            collapsed={sidebarCollapsed}
+            active={currentView === 'calendar'}
+            onClick={() => { setSelectedPatientId(null); setCurrentView('calendar'); }}
+          />
+          <SidebarItem
             icon={<Calendar size={20} />}
             label="日程预约"
+            collapsed={sidebarCollapsed}
             active={currentView === 'schedule'}
             onClick={() => { setSelectedPatientId(null); setCurrentView('schedule'); }}
           />
           <SidebarItem
             icon={<BarChart3 size={20} />}
             label="统计报表"
+            collapsed={sidebarCollapsed}
             active={currentView === 'reports'}
             onClick={() => { setSelectedPatientId(null); setCurrentView('reports'); }}
           />
           <SidebarItem
             icon={<Database size={20} />}
             label="RAG 知识库"
+            collapsed={sidebarCollapsed}
             active={currentView === 'rag'}
             onClick={() => { setSelectedPatientId(null); setCurrentView('rag'); }}
           />
         </nav>
+
+        <div className={`${sidebarCollapsed ? 'p-2' : 'p-4'} border-t border-slate-800`}>
+          <button
+            type="button"
+            onClick={() => setShowSettings(true)}
+            aria-label="系统设置"
+            title={sidebarCollapsed ? '系统设置' : undefined}
+            className={`flex w-full items-center rounded-lg py-3 text-slate-400 transition-colors hover:bg-slate-800 hover:text-white ${sidebarCollapsed ? 'justify-center px-2' : 'gap-3 px-4'}`}
+          >
+            <Settings size={20} className="shrink-0" />
+            <span className={sidebarCollapsed ? 'sr-only' : 'font-medium'}>系统设置</span>
+          </button>
+        </div>
       </aside>
 
-      <main className="flex-1 overflow-auto flex flex-col">
+      <main className="flex min-w-0 flex-1 flex-col overflow-auto">
         {renderContent()}
       </main>
 

@@ -6,8 +6,7 @@ import {
   RagExternalSourceStatus
 } from '../types';
 import { ragService } from './ragService';
-
-const EXTERNAL_SOURCES_KEY = 'ragExternalSources';
+import { ragStorage, RAG_EXTERNAL_SOURCES_STORE_KEY } from './ragStorage';
 
 type ExternalPayload = {
   documents?: unknown[];
@@ -114,7 +113,8 @@ const httpJsonAdapter: RagExternalSourceAdapter = {
       const payload = await response.json() as ExternalPayload;
       const documents = extractDocuments(payload)
         .map(item => this.mapDocument(item))
-        .filter(document => document.externalId && document.title && document.content && !document.deleted);
+        // 删除标记可以没有正文；它用于把旧片段从可检索索引中移除。
+        .filter(document => document.externalId && (document.deleted || (document.title && document.content)));
 
       return {
         success: true,
@@ -137,9 +137,13 @@ class ExternalRagSourceService {
   private adapters: Record<string, RagExternalSourceAdapter> = {
     [httpJsonAdapter.kind]: httpJsonAdapter
   };
+  private sources: RagExternalSourceConfig[] = [];
 
-  getSources(): RagExternalSourceConfig[] {
-    const stored = localStorage.getItem(EXTERNAL_SOURCES_KEY);
+  async initialize() {
+    this.sources = this.parseSources(await ragStorage.getItem(RAG_EXTERNAL_SOURCES_STORE_KEY));
+  }
+
+  private parseSources(stored: string | null): RagExternalSourceConfig[] {
     if (!stored) return [];
     try {
       const parsed = JSON.parse(stored);
@@ -150,8 +154,13 @@ class ExternalRagSourceService {
     }
   }
 
-  saveSources(sources: RagExternalSourceConfig[]) {
-    localStorage.setItem(EXTERNAL_SOURCES_KEY, JSON.stringify(sources));
+  getSources(): RagExternalSourceConfig[] {
+    return this.sources;
+  }
+
+  async saveSources(sources: RagExternalSourceConfig[]) {
+    this.sources = sources;
+    await ragStorage.setItem(RAG_EXTERNAL_SOURCES_STORE_KEY, JSON.stringify(sources));
   }
 
   createSource(): RagExternalSourceConfig {
@@ -165,7 +174,7 @@ class ExternalRagSourceService {
     };
   }
 
-  upsertSource(source: RagExternalSourceConfig) {
+  async upsertSource(source: RagExternalSourceConfig) {
     const cleanSource: RagExternalSourceConfig = {
       ...source,
       name: source.name.trim() || '外部 JSON 数据源',
@@ -176,12 +185,12 @@ class ExternalRagSourceService {
     const index = sources.findIndex(item => item.id === cleanSource.id);
     if (index >= 0) sources[index] = cleanSource;
     else sources.unshift(cleanSource);
-    this.saveSources(sources);
+    await this.saveSources(sources);
     return cleanSource;
   }
 
-  deleteSource(sourceId: string) {
-    this.saveSources(this.getSources().filter(source => source.id !== sourceId));
+  async deleteSource(sourceId: string) {
+    await this.saveSources(this.getSources().filter(source => source.id !== sourceId));
   }
 
   private getAdapter(source: RagExternalSourceConfig) {
@@ -197,7 +206,10 @@ class ExternalRagSourceService {
   async syncSource(source: RagExternalSourceConfig): Promise<RagExternalSourceStatus> {
     const adapter = this.getAdapter(source);
     if (!adapter) return { success: false, message: '未找到对应外部数据源 adapter。' };
-    const savedSource = this.upsertSource(source);
+    const savedSource = await this.upsertSource(source);
+    if (!savedSource.enabled) {
+      return { success: false, message: '该外部数据源已禁用，无法同步。' };
+    }
     const result = await adapter.pull(savedSource, savedSource.cursor);
     const now = new Date().toISOString();
 
@@ -207,30 +219,18 @@ class ExternalRagSourceService {
       lastSyncedAt: result.success ? now : savedSource.lastSyncedAt,
       lastError: result.success ? '' : result.message
     };
-    this.upsertSource(nextSource);
+    await this.upsertSource(nextSource);
 
     if (!result.success) return { success: false, message: result.message };
 
-    result.documents.forEach(document => {
-      ragService.addKnowledgeEntry({
-        type: 'external',
-        title: document.title,
-        content: document.content,
-        externalSourceId: savedSource.id,
-        externalSourceName: savedSource.name,
-        externalId: document.externalId,
-        metadata: {
-          ...(document.updatedAt ? { updatedAt: document.updatedAt } : {}),
-          ...(document.patientMatch?.name ? { patientName: document.patientMatch.name } : {}),
-          ...(document.patientMatch?.phone ? { patientPhone: document.patientMatch.phone } : {}),
-          ...(document.metadata || {})
-        }
-      });
-    });
+    const syncResult = await ragService.syncExternalDocuments({
+      externalSourceId: savedSource.id,
+      externalSourceName: savedSource.name
+    }, result.documents);
 
     return {
       success: true,
-      message: `同步完成，写入 ${result.documents.length} 条外部文档。`
+      message: `同步完成，更新 ${syncResult.upserted} 条外部文档，标记删除 ${syncResult.markedDeleted} 条。`
     };
   }
 }

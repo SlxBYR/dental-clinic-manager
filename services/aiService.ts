@@ -1,7 +1,15 @@
 import { AiAnswerCitation, AiAnswerResult, AiSettings, RagSearchHit } from '../types';
+import { ragStorage, RAG_AI_SETTINGS_STORE_KEY } from './ragStorage';
 
-const AI_SETTINGS_KEY = 'ragAiSettings';
 const DEFAULT_AI_BASE_URL = 'https://api.openai.com/v1';
+const DEFAULT_SYSTEM_PROMPT = '你是口腔诊所管理系统内的资料归纳助手。';
+const SAFETY_REQUIREMENTS = [
+  '只能根据用户提供的引用片段回答。',
+  '回答必须包含引用编号，例如 [1]、[2]。',
+  '如果引用片段不足以回答，直接说明没有足够依据。',
+  '不要输出诊断结论，不要编造患者信息。'
+].join('\n');
+const clampSystemPrompt = (value: string) => value.trim().slice(0, 4000);
 
 const DEFAULT_AI_SETTINGS: AiSettings = {
   enabled: false,
@@ -9,6 +17,7 @@ const DEFAULT_AI_SETTINGS: AiSettings = {
   baseUrl: DEFAULT_AI_BASE_URL,
   apiKey: '',
   model: '',
+  systemPrompt: DEFAULT_SYSTEM_PROMPT,
   sendPatientInfo: false,
   redactionMode: 'strict',
   maxContextChunks: 6
@@ -52,9 +61,18 @@ const buildCitation = (hit: RagSearchHit, index: number): AiAnswerCitation => ({
   externalId: hit.externalId
 });
 
+const getUsedCitationIndexes = (answer: string) => Array.from(answer.matchAll(/\[(\d+)\]/g))
+  .map(match => Number(match[1]))
+  .filter(index => Number.isSafeInteger(index) && index > 0);
+
 class AiService {
-  getSettings(): AiSettings {
-    const stored = localStorage.getItem(AI_SETTINGS_KEY);
+  private settings: AiSettings = { ...DEFAULT_AI_SETTINGS };
+
+  async initialize() {
+    this.settings = this.parseSettings(await ragStorage.getItem(RAG_AI_SETTINGS_STORE_KEY));
+  }
+
+  private parseSettings(stored: string | null): AiSettings {
     if (!stored) return DEFAULT_AI_SETTINGS;
     try {
       const parsed = JSON.parse(stored) as Partial<AiSettings>;
@@ -65,6 +83,9 @@ class AiService {
         baseUrl: typeof parsed.baseUrl === 'string' ? normalizeBaseUrl(parsed.baseUrl) : DEFAULT_AI_SETTINGS.baseUrl,
         apiKey: typeof parsed.apiKey === 'string' ? parsed.apiKey : '',
         model: typeof parsed.model === 'string' ? parsed.model : '',
+        systemPrompt: typeof parsed.systemPrompt === 'string'
+          ? clampSystemPrompt(parsed.systemPrompt) || DEFAULT_SYSTEM_PROMPT
+          : DEFAULT_SYSTEM_PROMPT,
         maxContextChunks: clampContextChunks(Number(parsed.maxContextChunks)),
         redactionMode: parsed.redactionMode === 'off' || parsed.redactionMode === 'basic' || parsed.redactionMode === 'strict'
           ? parsed.redactionMode
@@ -75,16 +96,23 @@ class AiService {
     }
   }
 
-  updateSettings(settings: AiSettings) {
-    localStorage.setItem(AI_SETTINGS_KEY, JSON.stringify({
+  getSettings(): AiSettings {
+    return this.settings;
+  }
+
+  async updateSettings(settings: AiSettings) {
+    const nextSettings: AiSettings = {
       ...settings,
       provider: 'openai-compatible',
       baseUrl: normalizeBaseUrl(settings.baseUrl),
       apiKey: settings.apiKey.trim(),
       model: settings.model.trim(),
+      systemPrompt: clampSystemPrompt(settings.systemPrompt) || DEFAULT_SYSTEM_PROMPT,
       maxContextChunks: clampContextChunks(settings.maxContextChunks),
       redactionMode: settings.redactionMode
-    }));
+    };
+    this.settings = nextSettings;
+    await ragStorage.setItem(RAG_AI_SETTINGS_STORE_KEY, JSON.stringify(nextSettings));
   }
 
   async generateAnswer(query: string, hits: RagSearchHit[]): Promise<AiAnswerResult> {
@@ -109,13 +137,7 @@ class AiService {
       ].join('\n');
     }).join('\n\n');
 
-    const systemPrompt = [
-      '你是口腔诊所管理系统内的资料归纳助手。',
-      '只能根据用户提供的引用片段回答。',
-      '回答必须包含引用编号，例如 [1]、[2]。',
-      '如果引用片段不足以回答，直接说明没有足够依据。',
-      '不要输出诊断结论，不要编造患者信息。'
-    ].join('\n');
+    const systemPrompt = [settings.systemPrompt, SAFETY_REQUIREMENTS].join('\n\n');
 
     const userPrompt = [
       `问题：${query.trim()}`,
@@ -155,10 +177,20 @@ class AiService {
         return { success: false, message: 'AI 服务没有返回可用回答。', citations };
       }
 
-      if (!/\[\d+\]/.test(answer)) {
+      const usedCitationIndexes = Array.from(new Set(getUsedCitationIndexes(answer)));
+      if (usedCitationIndexes.length === 0) {
         return {
           success: false,
           message: 'AI 回答缺少引用编号，已拦截展示。',
+          citations
+        };
+      }
+
+      const citationMap = new Map(citations.map(citation => [citation.index, citation]));
+      if (usedCitationIndexes.some(index => !citationMap.has(index))) {
+        return {
+          success: false,
+          message: 'AI 回答包含无法对应到检索片段的引用，已拦截展示。',
           citations
         };
       }
@@ -167,7 +199,7 @@ class AiService {
         success: true,
         message: 'AI 回答已生成。',
         answer: answer.trim(),
-        citations
+        citations: usedCitationIndexes.map(index => citationMap.get(index) as AiAnswerCitation)
       };
     } catch (error) {
       const message = error instanceof DOMException && error.name === 'AbortError'
