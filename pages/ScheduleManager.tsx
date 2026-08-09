@@ -8,9 +8,10 @@ import { AddAppointmentModal } from '../modals/AddAppointmentModal';
 import { ConfirmationModal } from '../modals/ConfirmationModal';
 import { getAppointmentStatusClass, getAppointmentStatusLabel } from '../utils/statusStyles';
 
-const START_MINUTES = 0;
-const END_MINUTES = 24 * 60;
 const SLOT_MINUTES = 30;
+const START_MINUTES = 8 * 60;
+const LAST_VISIBLE_SLOT_MINUTES = 20 * 60;
+const END_MINUTES = LAST_VISIBLE_SLOT_MINUTES + SLOT_MINUTES;
 const SLOT_HEIGHT = 48;
 const MINUTE_HEIGHT = SLOT_HEIGHT / SLOT_MINUTES;
 const WEEKDAY_LABELS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
@@ -77,7 +78,7 @@ export const ScheduleManager = ({ patients, onRefresh, onPatientClick }: { patie
   const slots = Array.from({ length: (END_MINUTES - START_MINUTES) / SLOT_MINUTES }, (_, index) => START_MINUTES + index * SLOT_MINUTES);
   const now = new Date();
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
-  const showNowLine = today >= startDate && today <= endDate && nowMinutes >= START_MINUTES && nowMinutes <= END_MINUTES;
+  const showNowLine = today >= startDate && today <= endDate && nowMinutes >= START_MINUTES && nowMinutes <= LAST_VISIBLE_SLOT_MINUTES;
 
   const advanceStatus = (event: React.MouseEvent, appointment: GlobalAppointment) => {
     event.stopPropagation();

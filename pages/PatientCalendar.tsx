@@ -72,6 +72,7 @@ export const PatientCalendar = ({
   const [monthInput, setMonthInput] = useState(String(today.getMonth() + 1));
   const [patientSearch, setPatientSearch] = useState('');
   const monthEditorRef = useRef<HTMLDivElement>(null);
+  const monthEditorPanelRef = useRef<HTMLDivElement>(null);
   const selectedYearOptionRef = useRef<HTMLButtonElement>(null);
 
   const activityByDate = useMemo(() => {
@@ -146,7 +147,14 @@ export const PatientCalendar = ({
 
   useEffect(() => {
     if (!isEditingMonth) return;
-    selectedYearOptionRef.current?.scrollIntoView({ block: 'center' });
+    const frame = window.requestAnimationFrame(() => {
+      monthEditorPanelRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      const selectedYear = selectedYearOptionRef.current;
+      const yearList = selectedYear?.parentElement;
+      if (selectedYear && yearList) {
+        yearList.scrollTop = selectedYear.offsetTop - yearList.clientHeight / 2 + selectedYear.clientHeight / 2;
+      }
+    });
     const handlePointerDown = (event: PointerEvent) => {
       if (!monthEditorRef.current?.contains(event.target as Node)) commitMonthEditor();
     };
@@ -156,6 +164,7 @@ export const PatientCalendar = ({
     document.addEventListener('pointerdown', handlePointerDown);
     document.addEventListener('keydown', handleKeyDown);
     return () => {
+      window.cancelAnimationFrame(frame);
       document.removeEventListener('pointerdown', handlePointerDown);
       document.removeEventListener('keydown', handleKeyDown);
     };
@@ -226,7 +235,7 @@ export const PatientCalendar = ({
           {monthLabel}
         </button>
         {isEditingMonth && (
-          <div className="absolute bottom-full right-0 z-50 mb-2 w-[340px] rounded-xl border border-slate-200 bg-white p-3 shadow-xl">
+          <div ref={monthEditorPanelRef} className="absolute left-0 top-full z-50 mt-2 w-[340px] rounded-xl border border-slate-200 bg-white p-3 shadow-xl">
             <div className="grid w-full grid-cols-[minmax(0,1fr)_88px] gap-2" style={{ fontFamily: CALENDAR_MONTH_FONT_FAMILY }}>
               <input
                 autoFocus
@@ -295,7 +304,6 @@ export const PatientCalendar = ({
     <div className="flex h-full min-h-0 w-full flex-col p-6">
       <div className="mb-5">
         <h2 className="text-3xl font-bold text-slate-900">患者更新日历</h2>
-        <p className="mt-1 text-sm text-slate-500">新增、预约、初诊、复诊、资料和处置变更都会记录在对应日期。</p>
       </div>
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-5 xl:grid-cols-[max-content_minmax(320px,1fr)]">
