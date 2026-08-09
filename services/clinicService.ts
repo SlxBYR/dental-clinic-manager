@@ -6,6 +6,7 @@ import { LocalStorageStore } from './storage/localStorageStore';
 import { CLINIC_DATA_STORE_KEY, KeyValueStore } from './storage/types';
 import { formatLocalDateTime, getLocalDateKeyFromTimestamp } from '../utils/date';
 import { getPatientPinyinTerms } from '../utils/patientSearch';
+import { mergeConsecutiveSameDayNoteChanges } from '../utils/treatmentChangeLogs';
 
 const normalizeName = (name: string) => name.trim().replace(/\s+/g, ' ').toLowerCase();
 const normalizePhone = (phone: string) => phone.trim().replace(/\s/g, '');
@@ -44,6 +45,7 @@ type AppointmentInputOptions = {
 };
 
 const normalizeDuration = (value?: number) => Math.max(15, Math.min(480, Number(value) || 30));
+const MAX_CONCURRENT_APPOINTMENTS = 3;
 
 const normalizePlannedTreatments = (
   appointmentId: string,
@@ -1207,19 +1209,21 @@ class ClinicService {
 
         if (changedFields.length === 0) return true;
 
+        const changeLogs = mergeConsecutiveSameDayNoteChanges([
+          ...(Array.isArray(current.changeLogs) ? current.changeLogs : []),
+          {
+            id: createTreatmentLogId(recordId),
+            changedAt: new Date().toISOString(),
+            changedFields,
+            before,
+            after
+          }
+        ]);
+
         patient.treatments[index] = {
           ...current,
           ...updates,
-          changeLogs: [
-            ...(Array.isArray(current.changeLogs) ? current.changeLogs : []),
-            {
-              id: createTreatmentLogId(recordId),
-              changedAt: new Date().toISOString(),
-              changedFields,
-              before,
-              after
-            }
-          ]
+          changeLogs
         };
         this.recordPatientActivity(patientId, 'treatment_updated', `修改处置：${patient.treatments[index].item}`);
         this.saveData();
@@ -1254,16 +1258,29 @@ class ClinicService {
     return undefined;
   }
 
-  private findAppointmentConflict(date: string, time: string, durationMinutes = 30, excludeId?: string): GlobalAppointment | undefined {
-    // 当前尚未建模医生/椅位资源，因此同一时间段只允许一条未取消日程。
+  private findAppointmentCapacityConflict(date: string, time: string, durationMinutes = 30, excludeId?: string): GlobalAppointment[] {
     const start = timeToMinutes(time);
     const end = start + normalizeDuration(durationMinutes);
-    return (this.data.appointments[date] || []).find(appt => (
+    const activeAppointments = (this.data.appointments[date] || []).filter(appt => (
       appt.id !== excludeId
       && appt.status !== 'cancelled'
       && start < timeToMinutes(appt.time) + normalizeDuration(appt.durationMinutes)
       && end > timeToMinutes(appt.time)
     ));
+    const checkpoints = [
+      start,
+      ...activeAppointments.map(appt => Math.max(start, timeToMinutes(appt.time)))
+    ];
+    for (const checkpoint of checkpoints) {
+      if (checkpoint >= end) continue;
+      const overlapping = activeAppointments.filter(appt => {
+        const appointmentStart = timeToMinutes(appt.time);
+        const appointmentEnd = appointmentStart + normalizeDuration(appt.durationMinutes);
+        return appointmentStart <= checkpoint && appointmentEnd > checkpoint;
+      });
+      if (overlapping.length >= MAX_CONCURRENT_APPOINTMENTS) return overlapping;
+    }
+    return [];
   }
 
   private syncPatientAppointmentSnapshot(appt: GlobalAppointment) {
@@ -1305,11 +1322,11 @@ class ClinicService {
     if (!patient) return { success: false, message: '患者不存在，无法创建预约。' };
 
     const durationMinutes = normalizeDuration(options.durationMinutes);
-    const conflict = this.findAppointmentConflict(date, time, durationMinutes);
-    if (conflict) {
+    const conflicts = this.findAppointmentCapacityConflict(date, time, durationMinutes);
+    if (conflicts.length >= MAX_CONCURRENT_APPOINTMENTS) {
       return {
         success: false,
-        message: `${date} ${time} 已有 ${conflict.name} 的预约，请选择其他时间。`
+        message: `${date} ${time} 所在时段已有 ${MAX_CONCURRENT_APPOINTMENTS} 个预约，该时段最多允许 ${MAX_CONCURRENT_APPOINTMENTS} 个预约。`
       };
     }
 
@@ -1351,11 +1368,11 @@ class ClinicService {
     if (!patient) return { success: false, message: '目标患者不存在，无法修改预约。' };
 
     const durationMinutes = normalizeDuration(updates.durationMinutes ?? found.appointment.durationMinutes);
-    const conflict = this.findAppointmentConflict(updates.date, updates.time, durationMinutes, appointmentId);
-    if (conflict) {
+    const conflicts = this.findAppointmentCapacityConflict(updates.date, updates.time, durationMinutes, appointmentId);
+    if (conflicts.length >= MAX_CONCURRENT_APPOINTMENTS) {
       return {
         success: false,
-        message: `${updates.date} ${updates.time} 已有 ${conflict.name} 的预约，请选择其他时间。`
+        message: `${updates.date} ${updates.time} 所在时段已有 ${MAX_CONCURRENT_APPOINTMENTS} 个预约，该时段最多允许 ${MAX_CONCURRENT_APPOINTMENTS} 个预约。`
       };
     }
 

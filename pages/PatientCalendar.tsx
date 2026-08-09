@@ -371,7 +371,10 @@ export const PatientCalendar = ({
                         {String(day.getDate()).padStart(2, '0')}
                       </span>
                       {summaries.length > 0 && (
-                        <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-teal-600 px-1 text-[9px] font-bold leading-none text-white">
+                        <span
+                          className="absolute right-0 top-0 z-20 flex h-4 min-w-4 items-center justify-center px-0.5 text-[9px] font-bold leading-none"
+                          style={{ backgroundColor: '#FF4747', color: '#4747FF' }}
+                        >
                           {summaries.length}
                         </span>
                       )}

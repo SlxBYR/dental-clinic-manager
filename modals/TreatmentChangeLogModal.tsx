@@ -2,6 +2,7 @@ import React from 'react';
 import { Clock3 } from 'lucide-react';
 import { Button } from '../components/Button';
 import { TreatmentChangeLog, TreatmentRecord } from '../types';
+import { mergeConsecutiveSameDayNoteChanges } from '../utils/treatmentChangeLogs';
 import { ModalBase } from './ModalBase';
 
 const FIELD_LABELS: Record<string, string> = {
@@ -49,7 +50,7 @@ export const TreatmentChangeLogModal = ({
   record: TreatmentRecord;
   onClose: () => void;
 }) => {
-  const logs = [...(record.changeLogs || [])].reverse();
+  const logs = mergeConsecutiveSameDayNoteChanges(record.changeLogs || []).reverse();
 
   return (
     <ModalBase title="处置修改记录" onClose={onClose} size="lg">
