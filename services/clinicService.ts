@@ -238,48 +238,43 @@ const patientLabel = (patient?: Patient) => {
   return `${patient.name}${patient.phone ? ` (${patient.phone})` : ''}`;
 };
 
-const getPatientLastUpdate = (patient: Patient) => {
-  let last = '0000-00-00';
-  patient.treatments.forEach(treatment => {
-    if (treatment.date > last) last = treatment.date;
-  });
-  patient.appointments.forEach(appointment => {
-    const date = appointment.datetime.split(' ')[0];
-    if (date > last) last = date;
-  });
-  (patient.activityLog || []).forEach(activity => {
-    const date = getLocalDateKeyFromTimestamp(activity.occurredAt);
-    if (date > last) last = date;
-  });
-  return last;
+const getPatientLastChangedAt = (patient: Patient) => {
+  const timestamps = [
+    patient.createdAt,
+    ...(patient.activityLog || []).map(activity => activity.occurredAt),
+    ...patient.treatments.flatMap(treatment => [
+      treatment.createdAt,
+      ...treatment.changeLogs.map(log => log.changedAt)
+    ]),
+    ...patient.appointments.flatMap(appointment => [appointment.created_at, appointment.checkedInAt])
+  ];
+  const latest = timestamps.reduce((max, value) => {
+    if (!value) return max;
+    const timestamp = new Date(value).getTime();
+    return Number.isFinite(timestamp) ? Math.max(max, timestamp) : max;
+  }, 0);
+  return latest > 0 ? new Date(latest).toISOString() : undefined;
 };
 
-const RECENT_PATIENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const getPatientLastUpdate = (patient: Patient) => {
+  const lastChangedAt = getPatientLastChangedAt(patient);
+  return lastChangedAt ? getLocalDateKeyFromTimestamp(lastChangedAt) : '0000-00-00';
+};
 
-const getPatientCreatedAtTime = (patient: Pick<Patient, 'createdAt'> | PatientListItem) => {
-  if (!patient.createdAt) return 0;
-  const timestamp = new Date(patient.createdAt).getTime();
+const getPatientLastChangedTime = (patient: PatientListItem) => {
+  if (!patient.lastChangedAt) return 0;
+  const timestamp = new Date(patient.lastChangedAt).getTime();
   return Number.isFinite(timestamp) ? timestamp : 0;
 };
 
-const isRecentlyCreatedPatient = (patient: Pick<Patient, 'createdAt'> | PatientListItem, now = Date.now()) => {
-  const createdAt = getPatientCreatedAtTime(patient);
-  return createdAt > 0 && now - createdAt >= 0 && now - createdAt <= RECENT_PATIENT_WINDOW_MS;
-};
-
-const comparePatientListItems = (a: PatientListItem, b: PatientListItem, now = Date.now()) => {
+const comparePatientListItems = (a: PatientListItem, b: PatientListItem) => {
   if (a.isTodayVisit !== b.isTodayVisit) return a.isTodayVisit ? -1 : 1;
   if (a.isTodayVisit && b.isTodayVisit) {
     const visitSort = (b.lastVisitAt || '').localeCompare(a.lastVisitAt || '');
     if (visitSort) return visitSort;
   }
-  const aRecent = isRecentlyCreatedPatient(a, now);
-  const bRecent = isRecentlyCreatedPatient(b, now);
-  if (aRecent !== bRecent) return aRecent ? -1 : 1;
-  if (aRecent && bRecent) return getPatientCreatedAtTime(b) - getPatientCreatedAtTime(a);
-
-  const dateSort = b.lastUpdate.localeCompare(a.lastUpdate);
-  return dateSort || a.name.localeCompare(b.name);
+  const changedSort = getPatientLastChangedTime(b) - getPatientLastChangedTime(a);
+  return changedSort || b.lastUpdate.localeCompare(a.lastUpdate) || a.name.localeCompare(b.name);
 };
 
 const isAttendedAppointment = (appointment: GlobalAppointment) => (
@@ -1015,9 +1010,11 @@ class ClinicService {
       })
       .map<PatientListItem>(patient => {
         const visit = getPatientVisitMetadata(patient, appointments, today);
+        const lastChangedAt = getPatientLastChangedAt(patient);
         return {
           id: patient.id,
           createdAt: patient.createdAt,
+          lastChangedAt,
           name: patient.name,
           phone: patient.phone,
           gender: patient.gender,
@@ -1030,14 +1027,14 @@ class ClinicService {
       .filter(patient => {
         if (scope === 'today') return patient.isTodayVisit;
         if (scope === 'recent') {
-          const visitDate = getLocalDateKeyFromTimestamp(patient.lastVisitAt);
-          return visitDate >= recentStart && visitDate <= today;
+          const changedDate = getLocalDateKeyFromTimestamp(patient.lastChangedAt);
+          return changedDate >= recentStart && changedDate <= today;
         }
         return true;
       })
-      .sort((a, b) => scope === 'all'
-        ? comparePatientListItems(a, b)
-        : (b.lastVisitAt || '').localeCompare(a.lastVisitAt || '') || a.name.localeCompare(b.name));
+      .sort((a, b) => scope === 'today'
+        ? (b.lastVisitAt || '').localeCompare(a.lastVisitAt || '') || a.name.localeCompare(b.name)
+        : comparePatientListItems(a, b));
 
     return {
       items: items.slice(offset, offset + limit),

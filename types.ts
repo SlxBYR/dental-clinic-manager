@@ -80,6 +80,7 @@ export interface Patient {
 export interface PatientListItem {
   id: string;
   createdAt?: string;
+  lastChangedAt?: string;
   name: string;
   phone: string;
   gender: string;

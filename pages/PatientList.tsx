@@ -11,6 +11,7 @@ const PAGE_SIZE = 30;
 export const PatientList = ({ onSelect, onRefresh }: { patients: Patient[], onSelect: (id: string) => void, onRefresh: () => void }) => {
   const [search, setSearch] = useState('');
   const [query, setQuery] = useState('');
+  const [scope, setScope] = useState<'all' | 'recent'>('all');
   const [showAddModal, setShowAddModal] = useState(false);
   const [items, setItems] = useState<PatientListItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -45,7 +46,7 @@ export const PatientList = ({ onSelect, onRefresh }: { patients: Patient[], onSe
     try {
       const page = await clinicService.getPatientListPage({
         query,
-        scope: 'all',
+        scope,
         today,
         offset: (currentPage - 1) * PAGE_SIZE,
         limit: PAGE_SIZE
@@ -66,7 +67,7 @@ export const PatientList = ({ onSelect, onRefresh }: { patients: Patient[], onSe
     } finally {
       if (requestGenerationRef.current === generation) setLoading(false);
     }
-  }, [currentPage, query, today]);
+  }, [currentPage, query, scope, today]);
 
   useEffect(() => {
     loadCurrentPage();
@@ -74,7 +75,7 @@ export const PatientList = ({ onSelect, onRefresh }: { patients: Patient[], onSe
 
   useEffect(() => {
     listScrollerRef.current?.scrollTo({ top: 0 });
-  }, [currentPage, query]);
+  }, [currentPage, query, scope]);
 
   const reloadPage = async (goToFirstPage = false) => {
     try {
@@ -117,7 +118,7 @@ export const PatientList = ({ onSelect, onRefresh }: { patients: Patient[], onSe
           )}
         </div>
       </div>
-      <div className="truncate text-slate-600">{patient.phone || '未填写'}</div>
+      <div className="truncate text-slate-600">{patient.phone || 'none'}</div>
       <div className="truncate text-slate-600">{patient.gender}, {patient.age}岁</div>
       <div className="truncate text-base text-slate-400">{patient.lastUpdate === '0000-00-00' ? '-' : patient.lastUpdate}</div>
       <div className="flex items-center justify-end gap-2">
@@ -148,15 +149,19 @@ export const PatientList = ({ onSelect, onRefresh }: { patients: Patient[], onSe
       <div className="flex justify-between items-center mb-6">
         <div>
           <h2 className="text-3xl font-bold text-slate-900">患者库</h2>
-          <div className="mt-1 text-sm text-slate-500">{query ? `匹配 ${total} 位患者` : `共 ${total} 位患者`}</div>
+          <div className="mt-1 text-sm text-slate-500">
+            {scope === 'recent'
+              ? `近七天有 ${total} 位患者产生新改动`
+              : query ? `匹配 ${total} 位患者` : `共 ${total} 位患者`}
+          </div>
         </div>
         <Button onClick={() => setShowAddModal(true)} size="lg">
           <Plus size={20} className="mr-2" /> 新增患者
         </Button>
       </div>
 
-      <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 mb-6">
-        <div className="relative">
+      <div className="flex items-center gap-3 bg-white p-4 rounded-xl shadow-sm border border-slate-200 mb-6">
+        <div className="relative min-w-0 flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
           <input
             type="text"
@@ -165,6 +170,29 @@ export const PatientList = ({ onSelect, onRefresh }: { patients: Patient[], onSe
             value={search}
             onChange={event => setSearch(event.target.value)}
           />
+        </div>
+        <div className="flex flex-shrink-0 rounded-lg bg-slate-100 p-1" role="group" aria-label="患者显示范围">
+          {([
+            ['all', '全部'],
+            ['recent', '近七天']
+          ] as const).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              className={`rounded-md px-4 py-2.5 text-sm font-semibold transition-colors ${
+                scope === value
+                  ? 'bg-white text-teal-700 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+              aria-pressed={scope === value}
+              onClick={() => {
+                setScope(value);
+                setCurrentPage(1);
+              }}
+            >
+              {label}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -184,7 +212,9 @@ export const PatientList = ({ onSelect, onRefresh }: { patients: Patient[], onSe
             <div className="p-10 text-center text-slate-400 text-lg">正在加载患者列表...</div>
           ) : total === 0 ? (
             <div className="p-10 text-center text-slate-500 text-lg">
-              {query ? '未找到匹配的患者。' : '暂无患者数据，请点击右上角新增。'}
+              {query
+                ? '未找到匹配的患者。'
+                : scope === 'recent' ? '近七天暂无患者新改动。' : '暂无患者数据，请点击右上角新增。'}
             </div>
           ) : (
             items.map(renderRow)
