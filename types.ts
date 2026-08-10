@@ -163,6 +163,8 @@ export interface CloudSyncSettings {
 export interface CloudSyncResult {
   success: boolean;
   message: string;
+  importContent?: string;
+  preview?: ImportPreview;
 }
 
 export interface ReleaseSettings {
@@ -182,23 +184,39 @@ export interface ReleaseCheckResult {
 }
 
 export interface ImportPreviewMetric {
+  key: string;
   label: string;
   current: number;
   incoming: number;
   added: number;
-  overwritten: number;
+  updated: number;
   removed: number;
+  conflicts: number;
+}
+
+export type ImportConflictResolution = 'local' | 'incoming';
+
+export interface ImportConflictPreview {
+  entityType: string;
+  entityId: string;
+  label: string;
+  fields: string[];
+  reason: string;
 }
 
 export interface ImportPreview {
   currentClinicName: string;
   incomingClinicName: string;
   dataVersion?: number;
+  previousSnapshotAt?: string;
+  localFingerprint: string;
+  conflictCount: number;
+  conflicts: ImportConflictPreview[];
   metrics: ImportPreviewMetric[];
   warnings: string[];
   samples: {
     addedPatients: string[];
-    overwrittenPatients: string[];
+    updatedPatients: string[];
     removedPatients: string[];
   };
 }

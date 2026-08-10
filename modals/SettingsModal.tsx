@@ -4,21 +4,51 @@ import { APP_VERSION } from '../constants';
 import { clinicService } from '../services/clinicService';
 import { aiService } from '../services/aiService';
 import { externalRagSourceService } from '../services/externalRagSourceService';
-import { CloudSyncResult, ImportPreview, RagExternalSourceConfig, ReleaseCheckResult, TreatmentCategory, TreatmentItem } from '../types';
+import { BackupSettings, CloudSyncResult, CloudSyncSettings, ImportConflictResolution, ImportPreview, RagExternalSourceConfig, ReleaseCheckResult, TreatmentCategory, TreatmentItem } from '../types';
 import { Button } from '../components/Button';
 import { ModalBase } from './ModalBase';
 import { ConfirmationModal } from './ConfirmationModal';
 import { getErrorStatusClass, getSuccessStatusClass } from '../utils/statusStyles';
+
+const replaceWorkerActionPath = (rawEndpoint: string, action: 'backup' | 'sync') => {
+  const trimmed = rawEndpoint.trim();
+  if (!trimmed) return '';
+  try {
+    const url = new URL(trimmed);
+    const path = url.pathname.replace(/\/+$/, '');
+    if (/\/(backup|sync)$/.test(path)) url.pathname = path.replace(/\/(backup|sync)$/, `/${action}`);
+    else url.pathname = `${path}/${action}`.replace(/^\/$/, `/${action}`);
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return trimmed;
+  }
+};
+
+const getCloudSyncSettingsFromBackup = (settings: BackupSettings): CloudSyncSettings => ({
+  endpoint: replaceWorkerActionPath(settings.endpoint, 'sync'),
+  key: settings.token?.trim() || ''
+});
+
+const getInitialBackupSettings = (): BackupSettings => {
+  const backup = clinicService.getBackupSettings();
+  if (backup.endpoint || backup.token) return backup;
+  const legacySync = clinicService.getCloudSyncSettings();
+  return {
+    endpoint: replaceWorkerActionPath(legacySync.endpoint, 'backup'),
+    token: legacySync.key
+  };
+};
 
 export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClose: () => void, onRefresh: () => void, currentClinicName: string }) => {
   const [tab, setTab] = useState<'data' | 'ai' | 'external' | 'catalog'>('data');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isMountedRef = useRef(true);
   const [clinicNameForm, setClinicNameForm] = useState(currentClinicName);
-  const [backupSettings, setBackupSettings] = useState(clinicService.getBackupSettings());
+  const [backupSettings, setBackupSettings] = useState(getInitialBackupSettings);
   const [backupStatus, setBackupStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
   const [isSendingBackup, setIsSendingBackup] = useState(false);
-  const [cloudSyncSettings, setCloudSyncSettings] = useState(clinicService.getCloudSyncSettings());
   const [cloudSyncStatus, setCloudSyncStatus] = useState<CloudSyncResult | null>(null);
   const [isPullingCloud, setIsPullingCloud] = useState(false);
   const [isPushingCloud, setIsPushingCloud] = useState(false);
@@ -27,6 +57,8 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
   const [isCheckingRelease, setIsCheckingRelease] = useState(false);
   const [pendingImportContent, setPendingImportContent] = useState<string | null>(null);
   const [pendingImportPreview, setPendingImportPreview] = useState<ImportPreview | null>(null);
+  const [pendingImportSource, setPendingImportSource] = useState<'file' | 'cloud'>('file');
+  const [importConflictResolution, setImportConflictResolution] = useState<ImportConflictResolution>('local');
   const [showRestoreConfirm, setShowRestoreConfirm] = useState(false);
   const [importStatus, setImportStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [hasPreImportBackup, setHasPreImportBackup] = useState(clinicService.hasPreImportBackup());
@@ -60,40 +92,54 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
   };
 
   const handleSaveBackupSettings = () => {
-    clinicService.updateBackupSettings(backupSettings);
-    setBackupStatus({ type: 'success', message: '备份接口配置已保存。' });
+    const normalizedBackupSettings = {
+      ...backupSettings,
+      endpoint: replaceWorkerActionPath(backupSettings.endpoint, 'backup')
+    };
+    setBackupSettings(normalizedBackupSettings);
+    clinicService.updateBackupSettings(normalizedBackupSettings);
+    clinicService.updateCloudSyncSettings(getCloudSyncSettingsFromBackup(normalizedBackupSettings));
+    setBackupStatus({ type: 'success', message: '云端接口配置已保存。' });
   };
 
   const handleSendBackup = async () => {
     setIsSendingBackup(true);
     setBackupStatus(null);
-    clinicService.updateBackupSettings(backupSettings);
-    const result = await clinicService.sendBackupToServer(backupSettings);
+    const normalizedBackupSettings = {
+      ...backupSettings,
+      endpoint: replaceWorkerActionPath(backupSettings.endpoint, 'backup')
+    };
+    setBackupSettings(normalizedBackupSettings);
+    clinicService.updateBackupSettings(normalizedBackupSettings);
+    clinicService.updateCloudSyncSettings(getCloudSyncSettingsFromBackup(normalizedBackupSettings));
+    const result = await clinicService.sendBackupToServer(normalizedBackupSettings);
     if (!isMountedRef.current) return;
     setBackupStatus({ type: result.success ? 'success' : 'error', message: result.message });
     setIsSendingBackup(false);
   };
 
-  const handleSaveCloudSyncSettings = () => {
-    clinicService.updateCloudSyncSettings(cloudSyncSettings);
-    setCloudSyncStatus({ success: true, message: '云端同步配置已保存。' });
-  };
-
   const handlePullCloudData = async () => {
-    if (!confirm('从云端同步会覆盖本机数据，确定继续吗？')) return;
     setIsPullingCloud(true);
     setCloudSyncStatus(null);
+    const cloudSyncSettings = getCloudSyncSettingsFromBackup(backupSettings);
     clinicService.updateCloudSyncSettings(cloudSyncSettings);
     const result = await clinicService.pullCloudData(cloudSyncSettings);
     if (!isMountedRef.current) return;
     setCloudSyncStatus(result);
-    if (result.success) onRefresh();
+    if (result.success && result.importContent && result.preview) {
+      setPendingImportSource('cloud');
+      setPendingImportContent(result.importContent);
+      setPendingImportPreview(result.preview);
+      setImportConflictResolution('local');
+    }
     setIsPullingCloud(false);
   };
 
   const handlePushCloudData = async () => {
+    if (!confirm('直接上传会用当前本机数据替换云端最新数据，只建议首次初始化云端或明确需要覆盖时使用。确定继续吗？')) return;
     setIsPushingCloud(true);
     setCloudSyncStatus(null);
+    const cloudSyncSettings = getCloudSyncSettingsFromBackup(backupSettings);
     clinicService.updateCloudSyncSettings(cloudSyncSettings);
     const result = await clinicService.pushCloudData(cloudSyncSettings);
     if (!isMountedRef.current) return;
@@ -214,7 +260,9 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
         if (event.target?.result) {
           setImportStatus(null);
           const content = event.target.result as string;
-          const result = clinicService.createImportPreview(content);
+          setPendingImportSource('file');
+          setImportConflictResolution('local');
+          const result = clinicService.createImportPreview(content, 'local', 'file');
           if (!result.success || !result.preview) {
             setPendingImportContent(null);
             setPendingImportPreview(null);
@@ -231,20 +279,55 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
   };
 
   const confirmImport = async () => {
-    if (!pendingImportContent) return;
-    const result = await clinicService.importData(pendingImportContent);
-    setPendingImportContent(null);
-    setPendingImportPreview(null);
-    setImportStatus({ type: result.success ? 'success' : 'error', message: result.message });
+    if (!pendingImportContent || !pendingImportPreview) return;
+    const source = pendingImportSource;
+    const result = await clinicService.importData(
+      pendingImportContent,
+      importConflictResolution,
+      pendingImportPreview.localFingerprint,
+      source
+    );
+    if (source === 'cloud') setCloudSyncStatus({ success: result.success, message: result.message });
+    else setImportStatus({ type: result.success ? 'success' : 'error', message: result.message });
     if (result.success) {
+      if (source === 'cloud') {
+        setIsPushingCloud(true);
+        const cloudSyncSettings = getCloudSyncSettingsFromBackup(backupSettings);
+        const pushResult = await clinicService.pushCloudData(cloudSyncSettings);
+        if (isMountedRef.current) {
+          setCloudSyncStatus({
+            success: pushResult.success,
+            message: pushResult.success
+              ? `${result.message} 合并结果已重新上传，所有设备可继续从同一基线同步。`
+              : `${result.message} 本机合并已完成，但合并结果未能回传云端：${pushResult.message}`
+          });
+          setIsPushingCloud(false);
+        }
+      }
+      setPendingImportContent(null);
+      setPendingImportPreview(null);
+      setPendingImportSource('file');
+      setImportConflictResolution('local');
       setHasPreImportBackup(clinicService.hasPreImportBackup());
       onRefresh();
+    } else {
+      const refreshedPreview = clinicService.createImportPreview(pendingImportContent, importConflictResolution, source);
+      if (refreshedPreview.success && refreshedPreview.preview) setPendingImportPreview(refreshedPreview.preview);
     }
   };
 
   const cancelImportPreview = () => {
     setPendingImportContent(null);
     setPendingImportPreview(null);
+    setPendingImportSource('file');
+    setImportConflictResolution('local');
+  };
+
+  const changeImportConflictResolution = (resolution: ImportConflictResolution) => {
+    setImportConflictResolution(resolution);
+    if (!pendingImportContent) return;
+    const refreshedPreview = clinicService.createImportPreview(pendingImportContent, resolution, pendingImportSource);
+    if (refreshedPreview.success && refreshedPreview.preview) setPendingImportPreview(refreshedPreview.preview);
   };
 
   const confirmRestorePreImportBackup = async () => {
@@ -349,22 +432,60 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
             </h4>
             <div className="flex gap-4 items-end">
               <div className="flex-1">
-                 <label className="block text-slate-600 mb-2 font-medium">诊所名称 (显示在左上角)</label>
+                 <label className="block text-slate-600 mb-2 font-medium">诊所名称</label>
                  <input className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none focus:ring-2 focus:ring-teal-500" value={clinicNameForm} onChange={e => setClinicNameForm(e.target.value)} />
               </div>
               <Button onClick={handleSaveClinicName} size="lg">保存名称</Button>
             </div>
-            <div className="mt-5 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
-              当前主存储：{storageStatus.primary === 'sqlite' ? 'SQLite' : 'localStorage'}。{storageStatus.message}
-            </div>
           </div>
 
           <div className="bg-slate-50 p-8 rounded-xl border border-slate-200">
-            <h4 className="font-bold text-slate-800 mb-2 flex items-center gap-2 text-lg">
-              <Download size={24} className="text-teal-600" /> 导出数据
+            <h4 className="font-bold text-slate-800 mb-5 flex items-center gap-2 text-lg">
+              <Database size={24} className="text-teal-600" /> 本地数据管理
             </h4>
-            <p className="text-base text-slate-500 mb-6">将所有患者、预约和设置数据导出为JSON文件备份。</p>
-            <Button onClick={handleExport} size="lg">导出 JSON</Button>
+            {importStatus && (
+              <div className={`mb-5 rounded-lg border px-4 py-3 text-base ${
+                importStatus.type === 'success' ? getSuccessStatusClass() : getErrorStatusClass()
+              }`}>
+                {importStatus.message}
+              </div>
+            )}
+            <input
+              type="file"
+              accept=".json"
+              ref={fileInputRef}
+              style={{ display: 'none' }}
+              onChange={handleImport}
+            />
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <div className="flex min-h-40 flex-col rounded-xl border border-slate-200 bg-white p-5">
+                <div className="mb-2 flex items-center gap-2 font-bold text-slate-800">
+                  <Download size={20} className="text-teal-600" /> 导出数据
+                </div>
+                <p className="mb-5 flex-1 text-sm leading-6 text-slate-500">将当前诊所数据导出为 JSON 文件。</p>
+                <Button onClick={handleExport} size="lg" className="w-full">导出 JSON</Button>
+              </div>
+
+              <div className="flex min-h-40 flex-col rounded-xl border border-slate-200 bg-white p-5">
+                <div className="mb-2 flex items-center gap-2 font-bold text-slate-800">
+                  <Upload size={20} className="text-blue-600" /> 导入数据
+                </div>
+                <p className="mb-5 flex-1 text-sm leading-6 text-slate-500">选择 JSON 备份，预览后增量合并到本机。</p>
+                <Button variant="secondary" onClick={() => fileInputRef.current?.click()} size="lg" className="w-full">选择文件导入</Button>
+              </div>
+
+              <div className="flex min-h-40 flex-col rounded-xl border border-slate-200 bg-white p-5">
+                <div className="mb-2 flex items-center gap-2 font-bold text-slate-800">
+                  <RefreshCw size={20} className="text-red-600" /> 恢复备份
+                </div>
+                <p className="mb-5 flex-1 text-sm leading-6 text-slate-500">撤回最近一次导入或云端增量更新。</p>
+                {hasPreImportBackup ? (
+                  <Button variant="danger" onClick={() => setShowRestoreConfirm(true)} size="lg" className="w-full">恢复更新前备份</Button>
+                ) : (
+                  <div className="flex min-h-12 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 px-4 text-slate-400">暂无更新前备份</div>
+                )}
+              </div>
+            </div>
           </div>
 
           <div className="bg-slate-50 p-8 rounded-xl border border-slate-200">
@@ -432,14 +553,11 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
 
           <div className="bg-slate-50 p-8 rounded-xl border border-slate-200">
             <h4 className="font-bold text-slate-800 mb-2 flex items-center gap-2 text-lg">
-              <Upload size={24} className="text-teal-600" /> 服务器备份
+              <Upload size={24} className="text-teal-600" /> 云端备份与同步配置
             </h4>
-            <p className="text-base text-slate-500 mb-6">
-              向自建接口发送完整备份。请求方式为 POST，JSON body 包含 generatedAt、clinicName、version 和 data；Token 会通过 Authorization: Bearer 发送。
-            </p>
             <div className="space-y-4">
               <div>
-                <label className="block text-slate-600 mb-2 font-medium">备份接口地址</label>
+                <label className="block text-slate-600 mb-2 font-medium">Worker 接口地址</label>
                 <input
                   className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none focus:ring-2 focus:ring-teal-500"
                   placeholder="https://your-domain.example.com/backup"
@@ -447,11 +565,12 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
                   onChange={e => {
                     setBackupSettings({ ...backupSettings, endpoint: e.target.value });
                     setBackupStatus(null);
+                    setCloudSyncStatus(null);
                   }}
                 />
               </div>
               <div>
-                <label className="block text-slate-600 mb-2 font-medium">访问 Token（可选）</label>
+                <label className="block text-slate-600 mb-2 font-medium">访问与加密 Token</label>
                 <input
                   type="password"
                   className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none focus:ring-2 focus:ring-teal-500"
@@ -460,6 +579,7 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
                   onChange={e => {
                     setBackupSettings({ ...backupSettings, token: e.target.value });
                     setBackupStatus(null);
+                    setCloudSyncStatus(null);
                   }}
                 />
               </div>
@@ -473,7 +593,7 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
                 </div>
               )}
               <div className="flex flex-wrap gap-3">
-                <Button onClick={handleSaveBackupSettings} variant="secondary" size="lg">保存接口配置</Button>
+                <Button onClick={handleSaveBackupSettings} variant="secondary" size="lg">保存云端配置</Button>
                 <Button onClick={handleSendBackup} size="lg" disabled={isSendingBackup}>
                   {isSendingBackup ? '发送中...' : '立即发送备份'}
                 </Button>
@@ -486,29 +606,11 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
               <RefreshCw size={24} className="text-teal-600" /> 云端同步
             </h4>
             <div className="space-y-4">
-              <div>
-                <label className="block text-slate-600 mb-2 font-medium">同步接口地址</label>
-                <input
-                  className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none focus:ring-2 focus:ring-teal-500"
-                  placeholder="https://your-domain.example.com/sync"
-                  value={cloudSyncSettings.endpoint}
-                  onChange={e => {
-                    setCloudSyncSettings({ ...cloudSyncSettings, endpoint: e.target.value });
-                    setCloudSyncStatus(null);
-                  }}
-                />
-              </div>
-              <div>
-                <label className="block text-slate-600 mb-2 font-medium">同步 Key</label>
-                <input
-                  type="password"
-                  className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none focus:ring-2 focus:ring-teal-500"
-                  value={cloudSyncSettings.key}
-                  onChange={e => {
-                    setCloudSyncSettings({ ...cloudSyncSettings, key: e.target.value });
-                    setCloudSyncStatus(null);
-                  }}
-                />
+              <div className="rounded-lg border border-slate-200 bg-white px-4 py-3">
+                <div className="text-sm font-medium text-slate-500">自动使用的同步地址</div>
+                <div className="mt-1 break-all font-mono text-sm text-slate-700">
+                  {getCloudSyncSettingsFromBackup(backupSettings).endpoint || '请先在上方填写并保存 Worker 接口地址'}
+                </div>
               </div>
               {cloudSyncStatus && (
                 <div className={`rounded-lg border px-4 py-3 text-base ${
@@ -520,64 +622,20 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
                 </div>
               )}
               <div className="flex flex-wrap gap-3">
-                <Button onClick={handleSaveCloudSyncSettings} variant="secondary" size="lg">保存同步配置</Button>
                 <Button onClick={handlePullCloudData} size="lg" disabled={isPullingCloud || isPushingCloud}>
                   {isPullingCloud ? '同步中...' : '从云端同步'}
                 </Button>
                 <Button onClick={handlePushCloudData} variant="secondary" size="lg" disabled={isPullingCloud || isPushingCloud}>
-                  {isPushingCloud ? '上传中...' : '上传本机数据'}
+                  {isPushingCloud ? '上传中...' : '初始化/覆盖云端'}
                 </Button>
               </div>
             </div>
-          </div>
-
-          <div className="bg-slate-50 p-8 rounded-xl border border-slate-200">
-            <h4 className="font-bold text-slate-800 mb-2 flex items-center gap-2 text-lg">
-              <Upload size={24} className="text-blue-600" /> 导入数据
-            </h4>
-            <p className="text-base text-slate-500 mb-6">从备份的JSON文件中恢复数据 (会覆盖当前数据)。</p>
-            {importStatus && (
-              <div className={`mb-4 rounded-lg border px-4 py-3 text-base ${
-                importStatus.type === 'success' ? getSuccessStatusClass() : getErrorStatusClass()
-              }`}>
-                {importStatus.message}
-              </div>
-            )}
-            <input
-              type="file"
-              accept=".json"
-              ref={fileInputRef}
-              style={{ display: 'none' }}
-              onChange={handleImport}
-            />
-            <Button variant="secondary" onClick={() => fileInputRef.current?.click()} size="lg">选择文件导入</Button>
-          </div>
-
-          <div className="bg-slate-50 p-8 rounded-xl border border-slate-200">
-            <h4 className="font-bold text-slate-800 mb-2 flex items-center gap-2 text-lg">
-              <RefreshCw size={24} className="text-red-600" /> 恢复导入前备份
-            </h4>
-            <p className="text-base text-slate-500 mb-6">
-              仅用于撤回最近一次导入覆盖。恢复前建议先导出当前数据。
-            </p>
-            {hasPreImportBackup ? (
-              <Button variant="danger" onClick={() => setShowRestoreConfirm(true)} size="lg">恢复导入前备份</Button>
-            ) : (
-              <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-slate-400">暂无导入前备份</div>
-            )}
           </div>
         </div>
       )}
 
       {tab === 'ai' && (
         <div className="space-y-6">
-          <div className="rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 text-amber-900">
-            <div className="font-bold">患者信息发送提醒</div>
-            <div className="mt-1 text-sm leading-6">
-              开启 AI 后，生成回答时可能会把检索命中的患者资料、处置备注或预约信息发送到第三方服务。默认关闭 AI，并默认使用严格脱敏。
-            </div>
-          </div>
-
           <div className="bg-slate-50 p-8 rounded-xl border border-slate-200">
             <h4 className="font-bold text-slate-800 mb-5 flex items-center gap-2 text-lg">
               <Bot size={24} className="text-teal-600" /> AI 回答设置
@@ -637,7 +695,7 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
                 <label className="block text-slate-600 mb-2 font-medium">模型</label>
                 <input
                   className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none focus:ring-2 focus:ring-teal-500"
-                  placeholder="例如 gpt-4.1-mini 或兼容接口模型名"
+                  placeholder=""
                   value={aiSettings.model}
                   onChange={e => {
                     setAiSettings({ ...aiSettings, model: e.target.value });
@@ -740,7 +798,6 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
               <h4 className="font-bold text-slate-800 flex items-center gap-2 text-lg">
                 <Database size={24} className="text-teal-600" /> 外部数据源
               </h4>
-              <p className="mt-1 text-sm text-slate-500">第一版支持只读 HTTP JSON 数据源；同步数据只进入 RAG 知识库，不自动覆盖患者档案。</p>
             </div>
             <Button onClick={addExternalSource}>
               <Plus size={18} className="mr-2" /> 新增数据源
@@ -924,12 +981,14 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
       )}
 
       {pendingImportContent && pendingImportPreview && (
-        <ModalBase title="导入预览" onClose={cancelImportPreview} size="lg">
+        <ModalBase title={pendingImportSource === 'cloud' ? '云端同步预览' : '导入预览'} onClose={cancelImportPreview} size="lg">
           <div className="space-y-6">
-            <div className="rounded-lg border border-amber-200 bg-amber-50 px-5 py-4 text-amber-900">
-              <div className="font-bold text-lg">确认后将覆盖当前本机数据</div>
+            <div className="rounded-lg border border-teal-200 bg-teal-50 px-5 py-4 text-teal-900">
+              <div className="font-bold text-lg">将增量合并到本机数据</div>
               <div className="mt-1 text-sm leading-6">
-                导入文件已完成迁移和结构校验。系统会在写入前保存导入前备份，但覆盖后的数据不能通过普通撤销恢复。
+                {pendingImportSource === 'cloud'
+                  ? '本机独有内容会保留，只有云端的新变化会自动加入；确认后会把合并结果重新加密上传，并保存为下一次云端同步快照。'
+                  : '本机独有内容会保留，只有导入文件中的新变化会自动加入。成功后会保存本次导入文件作为下一次冲突判断快照。'}
               </div>
             </div>
 
@@ -939,32 +998,34 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
                 <div className="mt-1 font-bold text-slate-800">{pendingImportPreview.currentClinicName}</div>
               </div>
               <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
-                <div className="text-sm text-slate-500">导入后诊所</div>
+                <div className="text-sm text-slate-500">{pendingImportSource === 'cloud' ? '云端诊所' : '导入文件诊所'}</div>
                 <div className="mt-1 font-bold text-slate-800">{pendingImportPreview.incomingClinicName}</div>
               </div>
             </div>
 
-            <div className="overflow-hidden rounded-lg border border-slate-200">
-              <table className="w-full text-left text-sm">
+            <div className="overflow-x-auto rounded-lg border border-slate-200">
+              <table className="w-full min-w-[760px] text-left text-sm">
                 <thead className="bg-slate-50 text-slate-500">
                   <tr>
                     <th className="px-4 py-3">数据项</th>
                     <th className="px-4 py-3">当前</th>
-                    <th className="px-4 py-3">导入后</th>
+                    <th className="px-4 py-3">{pendingImportSource === 'cloud' ? '云端' : '导入文件'}</th>
                     <th className="px-4 py-3 text-teal-700">新增</th>
-                    <th className="px-4 py-3 text-amber-700">覆盖</th>
-                    <th className="px-4 py-3 text-red-700">移除</th>
+                    <th className="px-4 py-3 text-blue-700">更新</th>
+                    <th className="px-4 py-3 text-red-700">删除</th>
+                    <th className="px-4 py-3 text-amber-700">冲突</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
                   {pendingImportPreview.metrics.map(metric => (
-                    <tr key={metric.label}>
+                    <tr key={metric.key}>
                       <td className="px-4 py-3 font-medium text-slate-800">{metric.label}</td>
                       <td className="px-4 py-3 font-mono text-slate-600">{metric.current}</td>
                       <td className="px-4 py-3 font-mono text-slate-600">{metric.incoming}</td>
                       <td className="px-4 py-3 font-mono text-teal-700">{metric.added}</td>
-                      <td className="px-4 py-3 font-mono text-amber-700">{metric.overwritten}</td>
+                      <td className="px-4 py-3 font-mono text-blue-700">{metric.updated}</td>
                       <td className="px-4 py-3 font-mono text-red-700">{metric.removed}</td>
+                      <td className="px-4 py-3 font-mono text-amber-700">{metric.conflicts}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -974,8 +1035,8 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {[
                 { title: '新增患者示例', items: pendingImportPreview.samples.addedPatients },
-                { title: '覆盖患者示例', items: pendingImportPreview.samples.overwrittenPatients },
-                { title: '移除患者示例', items: pendingImportPreview.samples.removedPatients }
+                { title: '内容变化患者示例', items: pendingImportPreview.samples.updatedPatients },
+                { title: '明确删除预约示例', items: pendingImportPreview.samples.removedPatients }
               ].map(group => (
                 <div key={group.title} className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
                   <div className="font-bold text-slate-700">{group.title}</div>
@@ -990,8 +1051,57 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
               ))}
             </div>
 
+            {pendingImportPreview.conflictCount > 0 ? (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-5 py-4 text-amber-950">
+                <div className="font-bold text-lg">发现 {pendingImportPreview.conflictCount} 项冲突</div>
+                <div className="mt-1 text-sm leading-6">以下选择应用于全部冲突；没有冲突的字段仍会自动增量合并。</div>
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  {([
+                    { value: 'local' as const, title: '保留本机内容（推荐）', description: '冲突字段继续使用当前本机值。' },
+                    {
+                      value: 'incoming' as const,
+                      title: pendingImportSource === 'cloud' ? '采用云端内容' : '采用导入文件内容',
+                      description: pendingImportSource === 'cloud' ? '冲突字段改用云端值。' : '冲突字段改用导入文件中的值。'
+                    }
+                  ]).map(option => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => changeImportConflictResolution(option.value)}
+                      className={`rounded-lg border px-4 py-3 text-left transition-colors ${
+                        importConflictResolution === option.value
+                          ? 'border-amber-500 bg-white ring-2 ring-amber-200'
+                          : 'border-amber-200 bg-amber-50/50 hover:bg-white'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 font-bold">
+                        <span className={`h-3 w-3 rounded-full border ${importConflictResolution === option.value ? 'border-amber-600 bg-amber-500' : 'border-amber-400 bg-white'}`} />
+                        {option.title}
+                      </div>
+                      <div className="mt-1 text-sm text-amber-800">{option.description}</div>
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-4 max-h-48 space-y-2 overflow-y-auto">
+                  {pendingImportPreview.conflicts.slice(0, 20).map(conflict => (
+                    <div key={`${conflict.entityType}:${conflict.entityId}`} className="rounded-md border border-amber-200 bg-white px-3 py-2 text-sm">
+                      <span className="font-bold">【{conflict.entityType}】{conflict.label}</span>
+                      <span className="text-amber-800">：{conflict.fields.join('、')}；{conflict.reason}</span>
+                    </div>
+                  ))}
+                  {pendingImportPreview.conflictCount > 20 && (
+                    <div className="text-sm text-amber-800">另有 {pendingImportPreview.conflictCount - 20} 项冲突未在列表中展开。</div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-lg border border-teal-200 bg-teal-50 px-4 py-3 font-medium text-teal-800">
+                未发现冲突，可以直接{pendingImportSource === 'cloud' ? '增量同步' : '增量导入'}。
+              </div>
+            )}
+
             <div className="rounded-lg border border-slate-200 bg-white px-4 py-3">
-              <div className="font-bold text-slate-700">风险提示</div>
+              <div className="font-bold text-slate-700">{pendingImportSource === 'cloud' ? '同步说明' : '导入说明'}</div>
               <ul className="mt-2 space-y-1 text-sm text-slate-600">
                 {pendingImportPreview.warnings.map(warning => <li key={warning}>{warning}</li>)}
               </ul>
@@ -999,7 +1109,11 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
 
             <div className="flex justify-end gap-3 pt-2">
               <Button variant="secondary" onClick={cancelImportPreview} size="lg">取消</Button>
-              <Button variant="danger" onClick={confirmImport} size="lg">确认覆盖导入</Button>
+              <Button onClick={confirmImport} size="lg">
+                {pendingImportPreview.conflictCount > 0
+                  ? `按所选方式${pendingImportSource === 'cloud' ? '增量同步' : '增量导入'}`
+                  : `确认${pendingImportSource === 'cloud' ? '增量同步' : '增量导入'}`}
+              </Button>
             </div>
           </div>
         </ModalBase>
@@ -1007,8 +1121,8 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
 
       {showRestoreConfirm && (
         <ConfirmationModal
-          title="恢复导入前备份确认"
-          message="恢复导入前备份会覆盖当前本机数据，并写回当前主存储。此操作不能通过普通撤销恢复，建议先导出当前数据后再继续。"
+          title="恢复更新前备份确认"
+          message="恢复更新前备份会整体替换当前本机数据，并同步恢复文件导入和云端同步的冲突判断快照。此操作不能通过普通撤销恢复，建议先导出当前数据后再继续。"
           confirmLabel="确认恢复备份"
           onConfirm={confirmRestorePreImportBackup}
           onCancel={() => setShowRestoreConfirm(false)}

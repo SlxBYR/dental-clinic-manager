@@ -1,6 +1,6 @@
 import { DEFAULT_CATALOG, DATA_VERSION } from '../constants';
 import { Appointment, AppointmentStatus, ClinicData, GlobalAppointment, Patient, PatientActivity, PatientActivityType, PlannedTreatment, TreatmentChangeLog, TreatmentRecord, VisitType } from '../types';
-import { formatDateKey, formatLocalDateTime, getLocalDateKeyFromTimestamp } from '../utils/date';
+import { getLocalDateKeyFromTimestamp } from '../utils/date';
 
 const normalizeName = (name: string) => name.trim().replace(/\s+/g, ' ').toLowerCase();
 const normalizePhone = (phone: string) => phone.trim().replace(/\s/g, '');
@@ -28,6 +28,16 @@ const getPatientGroupId = (phone: string) => {
 };
 
 const sanitizeIdPart = (value: string) => value.replace(/[^a-zA-Z0-9_-]/g, '');
+
+const stableLegacyHash = (...parts: unknown[]) => {
+  const source = parts.map(part => String(part ?? '')).join('|');
+  let hash = 2166136261;
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+};
 
 // 预约 id 必须跨日期唯一，后续编辑、删除、取消都依赖它定位同一条记录。
 export const createAppointmentId = (date: string, time: string, patientId: string, suffix = Date.now().toString(36)) => (
@@ -105,11 +115,11 @@ const normalizeLogValueMap = (value: any): Record<string, string | number | unde
   }, {});
 };
 
-const normalizeTreatmentChangeLog = (log: any, treatmentId: string, index: number): TreatmentChangeLog => ({
+const normalizeTreatmentChangeLog = (log: any, treatmentId: string, index: number, fallbackChangedAt: string): TreatmentChangeLog => ({
   id: typeof log?.id === 'string' && log.id.trim()
     ? log.id
     : `tlog_${sanitizeIdPart(treatmentId)}_${index}`,
-  changedAt: typeof log?.changedAt === 'string' && log.changedAt.trim() ? log.changedAt : new Date().toISOString(),
+  changedAt: typeof log?.changedAt === 'string' && log.changedAt.trim() ? log.changedAt : fallbackChangedAt,
   changedFields: Array.isArray(log?.changedFields)
     ? log.changedFields.filter((field: unknown): field is string => typeof field === 'string' && field.trim().length > 0)
     : [],
@@ -119,15 +129,24 @@ const normalizeTreatmentChangeLog = (log: any, treatmentId: string, index: numbe
 });
 
 const normalizeTreatment = (record: any, index: number): TreatmentRecord => {
-  const id = typeof record?.id === 'string' && record.id.trim() ? record.id : `treatment_${Date.now()}_${index}`;
+  const date = typeof record?.date === 'string' && record.date.trim()
+    ? record.date
+    : typeof record?.createdAt === 'string' && /^\d{4}-\d{2}-\d{2}/.test(record.createdAt)
+      ? record.createdAt.slice(0, 10)
+      : '1970-01-01';
+  const id = typeof record?.id === 'string' && record.id.trim()
+    ? record.id
+    : `treatment_legacy_${stableLegacyHash(date, record?.item, record?.price, record?.teeth, index)}`;
+  const createdAt = typeof record?.createdAt === 'string' ? record.createdAt : undefined;
+  const fallbackChangedAt = createdAt || `${date}T12:00:00.000Z`;
 
   // 处置记录迁移只补齐缺失字段，不推断旧版本没有保存过的业务信息。
   return {
     id,
     appointmentId: typeof record?.appointmentId === 'string' ? record.appointmentId : undefined,
     plannedTreatmentId: typeof record?.plannedTreatmentId === 'string' ? record.plannedTreatmentId : undefined,
-    date: typeof record?.date === 'string' && record.date.trim() ? record.date : formatDateKey(new Date()),
-    createdAt: typeof record?.createdAt === 'string' ? record.createdAt : undefined,
+    date,
+    createdAt,
     categoryId: typeof record?.categoryId === 'string' ? record.categoryId : undefined,
     itemId: typeof record?.itemId === 'string' ? record.itemId : undefined,
     item: typeof record?.item === 'string' ? record.item : '未命名处置',
@@ -135,7 +154,7 @@ const normalizeTreatment = (record: any, index: number): TreatmentRecord => {
     teeth: typeof record?.teeth === 'string' ? record.teeth : '',
     note: typeof record?.note === 'string' ? record.note : '',
     changeLogs: Array.isArray(record?.changeLogs)
-      ? record.changeLogs.map((log: any, logIndex: number) => normalizeTreatmentChangeLog(log, id, logIndex))
+      ? record.changeLogs.map((log: any, logIndex: number) => normalizeTreatmentChangeLog(log, id, logIndex, fallbackChangedAt))
       : []
   };
 };
@@ -143,7 +162,7 @@ const normalizeTreatment = (record: any, index: number): TreatmentRecord => {
 const makePatientAppointment = (appt: GlobalAppointment, createdAt?: string): Appointment => ({
   id: appt.id,
   datetime: `${appt.date} ${appt.time}`,
-  created_at: createdAt || formatLocalDateTime(new Date()),
+  created_at: createdAt || `${appt.date}T${appt.time}:00`,
   status: appt.status,
   visitType: appt.visitType,
   checkedInAt: appt.checkedInAt
@@ -251,7 +270,7 @@ export const migrateClinicData = (raw: any): ClinicData => {
           const checkedInAt = typeof appt?.checkedInAt === 'string' && appt.checkedInAt.trim()
             ? appt.checkedInAt
             : `${date}T${time}:00`;
-          appointmentDeletionTombstones[id] ||= new Date().toISOString();
+          appointmentDeletionTombstones[id] ||= checkedInAt;
           implicitVisitsByPatientId.set(patientId, [
             ...(implicitVisitsByPatientId.get(patientId) || []),
             {
