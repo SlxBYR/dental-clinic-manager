@@ -11,6 +11,32 @@ node_modules
 dist
 dist-ssr
 *.local
+release
+SourceCode.zip
+.source-package.*
+__MACOSX
+._*
+
+# Patient data and local databases
+dental_clinic_backup_*.json
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+
+# Secrets and signing credentials
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*.mobileprovision
+*.provisionprofile
+
+# One-off local packaging configuration
+electron-builder.fresh.cjs
 
 # Editor directories and files
 .vscode/*

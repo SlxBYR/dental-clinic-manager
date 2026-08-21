@@ -1,7 +1,14 @@
 {
   "name": "dental-clinic-manager",
   "private": true,
-  "version": "1.3.0",
+  "version": "1.3.2",
+  "license": "AGPL-3.0-only",
+  "description": "DentalSystem 口腔诊所管理系统",
+  "author": {
+    "name": "SlxBYR",
+    "email": "rnfmabj007@163.com"
+  },
+  "homepage": "https://github.com/SlxBYR/dental-clinic-manager",
   "type": "module",
   "main": "electron-main.js",
   "scripts": {
@@ -13,6 +20,8 @@
     "package": "bash scripts/package-tui.sh",
     "package:windows": "bash scripts/package-tui.sh --windows",
     "package:macos": "bash scripts/package-tui.sh --macos",
+    "package:macos:intel": "bash scripts/package-tui.sh --macos-intel",
+    "package:linux": "bash scripts/package-tui.sh --linux",
     "windows:uninstall-helper": "scripts/maintenance/windows-uninstall-dentalsystem.cmd"
   },
   "dependencies": {
@@ -69,7 +78,17 @@
     "mac": {
       "target": "dmg",
       "icon": "build/icon.icns",
-      "category": "public.app-category.medical"
+      "category": "public.app-category.medical",
+      "artifactName": "DentalSystem-${version}-${arch}.${ext}"
+    },
+    "linux": {
+      "target": "deb",
+      "icon": "build/icon.png",
+      "category": "Office",
+      "maintainer": "SlxBYR <rnfmabj007@163.com>",
+      "vendor": "DentalSystem",
+      "synopsis": "口腔诊所患者、处置和预约管理系统",
+      "artifactName": "DentalSystem-${version}-${arch}.${ext}"
     }
   }
 }

@@ -2,22 +2,33 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Check, Download, Edit2, ExternalLink, Plus, RefreshCw, Save, Settings, Trash2, Upload, X } from 'lucide-react';
 import { APP_VERSION } from '../constants';
 import { clinicService } from '../services/clinicService';
-import { CloudSyncResult, ImportPreview, ReleaseCheckResult, TreatmentCategory, TreatmentItem } from '../types';
+import { ImportPreview, ReleaseCheckResult, TreatmentCategory, TreatmentItem } from '../types';
 import { Button } from '../components/Button';
 import { ModalBase } from './ModalBase';
 import { ConfirmationModal } from './ConfirmationModal';
 import { getErrorStatusClass, getSuccessStatusClass } from '../utils/statusStyles';
+
+const normalizeCloudServiceUrl = (value: string) => value.trim().replace(/\/(backup|sync)\/?$/i, '').replace(/\/+$/, '');
+
+const createCloudEndpoint = (serviceUrl: string, path: 'backup' | 'sync') => (
+  `${normalizeCloudServiceUrl(serviceUrl)}/${path}`
+);
 
 export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClose: () => void, onRefresh: () => void, currentClinicName: string }) => {
   const [tab, setTab] = useState<'data' | 'catalog'>('data');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isMountedRef = useRef(true);
   const [clinicNameForm, setClinicNameForm] = useState(currentClinicName);
-  const [backupSettings, setBackupSettings] = useState(clinicService.getBackupSettings());
-  const [backupStatus, setBackupStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
+  const [cloudServiceSettings, setCloudServiceSettings] = useState(() => {
+    const backup = clinicService.getBackupSettings();
+    const sync = clinicService.getCloudSyncSettings();
+    return {
+      serviceUrl: normalizeCloudServiceUrl(backup.endpoint || sync.endpoint),
+      key: backup.token || sync.key
+    };
+  });
+  const [cloudStatus, setCloudStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
   const [isSendingBackup, setIsSendingBackup] = useState(false);
-  const [cloudSyncSettings, setCloudSyncSettings] = useState(clinicService.getCloudSyncSettings());
-  const [cloudSyncStatus, setCloudSyncStatus] = useState<CloudSyncResult | null>(null);
   const [isPullingCloud, setIsPullingCloud] = useState(false);
   const [isPushingCloud, setIsPushingCloud] = useState(false);
   const [releaseSettings, setReleaseSettings] = useState(clinicService.getReleaseSettings());
@@ -52,45 +63,73 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
     onRefresh();
   };
 
-  const handleSaveBackupSettings = () => {
+  const saveCloudServiceSettings = () => {
+    const serviceUrl = normalizeCloudServiceUrl(cloudServiceSettings.serviceUrl);
+    const key = cloudServiceSettings.key.trim();
+    if (!serviceUrl || !key) return null;
+    const backupSettings = { endpoint: createCloudEndpoint(serviceUrl, 'backup'), token: key };
+    const syncSettings = { endpoint: createCloudEndpoint(serviceUrl, 'sync'), key };
     clinicService.updateBackupSettings(backupSettings);
-    setBackupStatus({ type: 'success', message: '备份接口配置已保存。' });
+    clinicService.updateCloudSyncSettings(syncSettings);
+    setCloudServiceSettings({ serviceUrl, key });
+    return { backupSettings, syncSettings };
+  };
+
+  const handleSaveCloudServiceSettings = () => {
+    if (!saveCloudServiceSettings()) {
+      setCloudStatus({ type: 'error', message: '请填写云端服务地址和访问密钥。' });
+      return;
+    }
+    setCloudStatus({ type: 'success', message: '云端配置已保存，备份与同步将共用此地址和密钥。' });
   };
 
   const handleSendBackup = async () => {
     setIsSendingBackup(true);
-    setBackupStatus(null);
-    clinicService.updateBackupSettings(backupSettings);
+    setCloudStatus(null);
+    const settings = saveCloudServiceSettings();
+    if (!settings) {
+      setCloudStatus({ type: 'error', message: '请填写云端服务地址和访问密钥。' });
+      setIsSendingBackup(false);
+      return;
+    }
+    const { backupSettings } = settings;
     const result = await clinicService.sendBackupToServer(backupSettings);
     if (!isMountedRef.current) return;
-    setBackupStatus({ type: result.success ? 'success' : 'error', message: result.message });
+    setCloudStatus({ type: result.success ? 'success' : 'error', message: result.message });
     setIsSendingBackup(false);
-  };
-
-  const handleSaveCloudSyncSettings = () => {
-    clinicService.updateCloudSyncSettings(cloudSyncSettings);
-    setCloudSyncStatus({ success: true, message: '云端同步配置已保存。' });
   };
 
   const handlePullCloudData = async () => {
     if (!confirm('从云端同步会覆盖本机数据，确定继续吗？')) return;
     setIsPullingCloud(true);
-    setCloudSyncStatus(null);
-    clinicService.updateCloudSyncSettings(cloudSyncSettings);
-    const result = await clinicService.pullCloudData(cloudSyncSettings);
+    setCloudStatus(null);
+    const settings = saveCloudServiceSettings();
+    if (!settings) {
+      setCloudStatus({ type: 'error', message: '请填写云端服务地址和访问密钥。' });
+      setIsPullingCloud(false);
+      return;
+    }
+    const { syncSettings } = settings;
+    const result = await clinicService.pullCloudData(syncSettings);
     if (!isMountedRef.current) return;
-    setCloudSyncStatus(result);
+    setCloudStatus({ type: result.success ? 'success' : 'error', message: result.message });
     if (result.success) onRefresh();
     setIsPullingCloud(false);
   };
 
   const handlePushCloudData = async () => {
     setIsPushingCloud(true);
-    setCloudSyncStatus(null);
-    clinicService.updateCloudSyncSettings(cloudSyncSettings);
-    const result = await clinicService.pushCloudData(cloudSyncSettings);
+    setCloudStatus(null);
+    const settings = saveCloudServiceSettings();
+    if (!settings) {
+      setCloudStatus({ type: 'error', message: '请填写云端服务地址和访问密钥。' });
+      setIsPushingCloud(false);
+      return;
+    }
+    const { syncSettings } = settings;
+    const result = await clinicService.pushCloudData(syncSettings);
     if (!isMountedRef.current) return;
-    setCloudSyncStatus(result);
+    setCloudStatus({ type: result.success ? 'success' : 'error', message: result.message });
     setIsPushingCloud(false);
   };
 
@@ -267,27 +306,51 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
       {tab === 'data' && (
         <div className="space-y-8">
           <div className="bg-slate-50 p-8 rounded-xl border border-slate-200">
-            <h4 className="font-bold text-slate-800 mb-4 flex items-center gap-2 text-lg">
-              <Settings size={24} className="text-teal-600" /> 基本设置
-            </h4>
-            <div className="flex gap-4 items-end">
-              <div className="flex-1">
-                 <label className="block text-slate-600 mb-2 font-medium">诊所名称 (显示在左上角)</label>
-                 <input className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none focus:ring-2 focus:ring-teal-500" value={clinicNameForm} onChange={e => setClinicNameForm(e.target.value)} />
+            {importStatus && (
+              <div className={`mb-4 rounded-lg border px-4 py-3 text-base ${
+                importStatus.type === 'success' ? getSuccessStatusClass() : getErrorStatusClass()
+              }`}>
+                {importStatus.message}
               </div>
-              <Button onClick={handleSaveClinicName} size="lg">保存名称</Button>
+            )}
+            <input
+              type="file"
+              accept=".json"
+              ref={fileInputRef}
+              style={{ display: 'none' }}
+              onChange={handleImport}
+            />
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <Button onClick={handleExport} size="lg" className="min-h-16 w-full gap-2">
+                <Download size={21} aria-hidden="true" />
+                <span>导出备份文件</span>
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => fileInputRef.current?.click()}
+                size="lg"
+                className="min-h-16 w-full gap-2"
+              >
+                <Upload size={21} aria-hidden="true" />
+                <span>选择文件导入</span>
+              </Button>
+              {hasPreImportBackup ? (
+                <Button
+                  variant="danger"
+                  onClick={() => setShowRestoreConfirm(true)}
+                  size="lg"
+                  className="min-h-16 w-full gap-2"
+                >
+                  <RefreshCw size={21} aria-hidden="true" />
+                  <span>恢复之前备份</span>
+                </Button>
+              ) : (
+                <Button variant="secondary" size="lg" className="min-h-16 w-full gap-2" disabled>
+                  <RefreshCw size={21} aria-hidden="true" />
+                  <span>暂无可恢复备份</span>
+                </Button>
+              )}
             </div>
-            <div className="mt-5 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
-              当前主存储：{storageStatus.primary === 'sqlite' ? 'SQLite' : 'localStorage'}。{storageStatus.message}
-            </div>
-          </div>
-
-          <div className="bg-slate-50 p-8 rounded-xl border border-slate-200">
-            <h4 className="font-bold text-slate-800 mb-2 flex items-center gap-2 text-lg">
-              <Download size={24} className="text-teal-600" /> 导出数据
-            </h4>
-            <p className="text-base text-slate-500 mb-6">将所有患者、预约和设置数据导出为JSON文件备份。</p>
-            <Button onClick={handleExport} size="lg">导出 JSON</Button>
           </div>
 
           <div className="bg-slate-50 p-8 rounded-xl border border-slate-200">
@@ -355,99 +418,52 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
 
           <div className="bg-slate-50 p-8 rounded-xl border border-slate-200">
             <h4 className="font-bold text-slate-800 mb-2 flex items-center gap-2 text-lg">
-              <Upload size={24} className="text-teal-600" /> 服务器备份
+              <Upload size={24} className="text-teal-600" /> 云端数据
             </h4>
-            <p className="text-base text-slate-500 mb-6">
-              向自建接口发送完整备份。请求方式为 POST，JSON body 包含 generatedAt、clinicName、version 和 data；Token 会通过 Authorization: Bearer 发送。
-            </p>
             <div className="space-y-4">
               <div>
-                <label className="block text-slate-600 mb-2 font-medium">备份接口地址</label>
+                <label className="block text-slate-600 mb-2 font-medium">云端服务地址</label>
                 <input
                   className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none focus:ring-2 focus:ring-teal-500"
-                  placeholder="https://your-domain.example.com/backup"
-                  value={backupSettings.endpoint}
+                  placeholder="https://your-worker.workers.dev"
+                  value={cloudServiceSettings.serviceUrl}
                   onChange={e => {
-                    setBackupSettings({ ...backupSettings, endpoint: e.target.value });
-                    setBackupStatus(null);
+                    setCloudServiceSettings({ ...cloudServiceSettings, serviceUrl: e.target.value });
+                    setCloudStatus(null);
                   }}
                 />
               </div>
               <div>
-                <label className="block text-slate-600 mb-2 font-medium">访问 Token（可选）</label>
+                <label className="block text-slate-600 mb-2 font-medium">访问密钥</label>
                 <input
                   type="password"
                   className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none focus:ring-2 focus:ring-teal-500"
-                  placeholder="服务器校验用 Token"
-                  value={backupSettings.token || ''}
+                  placeholder="服务器 BACKUP_TOKEN"
+                  value={cloudServiceSettings.key}
                   onChange={e => {
-                    setBackupSettings({ ...backupSettings, token: e.target.value });
-                    setBackupStatus(null);
+                    setCloudServiceSettings({ ...cloudServiceSettings, key: e.target.value });
+                    setCloudStatus(null);
                   }}
                 />
               </div>
-              {backupStatus && (
+              {cloudStatus && (
                 <div className={`rounded-lg border px-4 py-3 text-base ${
-                  backupStatus.type === 'success'
+                  cloudStatus.type === 'success'
                     ? 'border-teal-200 bg-teal-50 text-teal-800'
                     : 'border-red-200 bg-red-50 text-red-700'
                 }`}>
-                  {backupStatus.message}
+                  {cloudStatus.message}
                 </div>
               )}
               <div className="flex flex-wrap gap-3">
-                <Button onClick={handleSaveBackupSettings} variant="secondary" size="lg">保存接口配置</Button>
-                <Button onClick={handleSendBackup} size="lg" disabled={isSendingBackup}>
-                  {isSendingBackup ? '发送中...' : '立即发送备份'}
+                <Button onClick={handleSaveCloudServiceSettings} variant="secondary" size="lg">保存云端配置</Button>
+                <Button onClick={handleSendBackup} size="lg" disabled={isSendingBackup || isPullingCloud || isPushingCloud}>
+                  {isSendingBackup ? '备份中...' : '创建历史备份'}
                 </Button>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-slate-50 p-8 rounded-xl border border-slate-200">
-            <h4 className="font-bold text-slate-800 mb-2 flex items-center gap-2 text-lg">
-              <RefreshCw size={24} className="text-teal-600" /> 云端同步
-            </h4>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-slate-600 mb-2 font-medium">同步接口地址</label>
-                <input
-                  className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none focus:ring-2 focus:ring-teal-500"
-                  placeholder="https://your-domain.example.com/sync"
-                  value={cloudSyncSettings.endpoint}
-                  onChange={e => {
-                    setCloudSyncSettings({ ...cloudSyncSettings, endpoint: e.target.value });
-                    setCloudSyncStatus(null);
-                  }}
-                />
-              </div>
-              <div>
-                <label className="block text-slate-600 mb-2 font-medium">同步 Key</label>
-                <input
-                  type="password"
-                  className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none focus:ring-2 focus:ring-teal-500"
-                  value={cloudSyncSettings.key}
-                  onChange={e => {
-                    setCloudSyncSettings({ ...cloudSyncSettings, key: e.target.value });
-                    setCloudSyncStatus(null);
-                  }}
-                />
-              </div>
-              {cloudSyncStatus && (
-                <div className={`rounded-lg border px-4 py-3 text-base ${
-                  cloudSyncStatus.success
-                    ? 'border-teal-200 bg-teal-50 text-teal-800'
-                    : 'border-red-200 bg-red-50 text-red-700'
-                }`}>
-                  {cloudSyncStatus.message}
-                </div>
-              )}
-              <div className="flex flex-wrap gap-3">
-                <Button onClick={handleSaveCloudSyncSettings} variant="secondary" size="lg">保存同步配置</Button>
-                <Button onClick={handlePullCloudData} size="lg" disabled={isPullingCloud || isPushingCloud}>
+                <Button onClick={handlePullCloudData} size="lg" disabled={isSendingBackup || isPullingCloud || isPushingCloud}>
                   {isPullingCloud ? '同步中...' : '从云端同步'}
                 </Button>
-                <Button onClick={handlePushCloudData} variant="secondary" size="lg" disabled={isPullingCloud || isPushingCloud}>
+                <Button onClick={handlePushCloudData} variant="secondary" size="lg" disabled={isSendingBackup || isPullingCloud || isPushingCloud}>
                   {isPushingCloud ? '上传中...' : '上传本机数据'}
                 </Button>
               </div>
@@ -455,39 +471,15 @@ export const SettingsModal = ({ onClose, onRefresh, currentClinicName }: { onClo
           </div>
 
           <div className="bg-slate-50 p-8 rounded-xl border border-slate-200">
-            <h4 className="font-bold text-slate-800 mb-2 flex items-center gap-2 text-lg">
-              <Upload size={24} className="text-blue-600" /> 导入数据
+            <h4 className="font-bold text-slate-800 mb-4 flex items-center gap-2 text-lg">
+              <Settings size={24} className="text-teal-600" /> 诊所名称
             </h4>
-            <p className="text-base text-slate-500 mb-6">从备份的JSON文件中恢复数据 (会覆盖当前数据)。</p>
-            {importStatus && (
-              <div className={`mb-4 rounded-lg border px-4 py-3 text-base ${
-                importStatus.type === 'success' ? getSuccessStatusClass() : getErrorStatusClass()
-              }`}>
-                {importStatus.message}
+            <div className="flex gap-4 items-end">
+              <div className="flex-1">
+                 <input className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg outline-none focus:ring-2 focus:ring-teal-500" value={clinicNameForm} onChange={e => setClinicNameForm(e.target.value)} />
               </div>
-            )}
-            <input
-              type="file"
-              accept=".json"
-              ref={fileInputRef}
-              style={{ display: 'none' }}
-              onChange={handleImport}
-            />
-            <Button variant="secondary" onClick={() => fileInputRef.current?.click()} size="lg">选择文件导入</Button>
-          </div>
-
-          <div className="bg-slate-50 p-8 rounded-xl border border-slate-200">
-            <h4 className="font-bold text-slate-800 mb-2 flex items-center gap-2 text-lg">
-              <RefreshCw size={24} className="text-red-600" /> 恢复导入前备份
-            </h4>
-            <p className="text-base text-slate-500 mb-6">
-              仅用于撤回最近一次导入覆盖。恢复前建议先导出当前数据。
-            </p>
-            {hasPreImportBackup ? (
-              <Button variant="danger" onClick={() => setShowRestoreConfirm(true)} size="lg">恢复导入前备份</Button>
-            ) : (
-              <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-slate-400">暂无导入前备份</div>
-            )}
+              <Button onClick={handleSaveClinicName} size="lg">保存名称</Button>
+            </div>
           </div>
         </div>
       )}

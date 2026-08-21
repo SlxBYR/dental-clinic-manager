@@ -1,11 +1,30 @@
 @echo off
 setlocal
+set "EXIT_CODE=0"
+set "DATA_OPTION="
 
+if /I "%~1"=="/quiet" (
+  shift
+  goto run_helper
+)
+
+echo.
+echo  DentalSystem Windows maintenance tool
+echo  This tool removes previous DentalSystem installations.
+echo  Choose whether local clinic data should be kept.
+echo.
+choice /C KDR /N /M "[K]eep data  [D]elete data  [R]eturn"
+if errorlevel 3 goto end
+if errorlevel 2 set "DATA_OPTION=-DeleteUserData"
+if errorlevel 1 goto run_helper
+
+:run_helper
 set "SELF=%~f0"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$raw = Get-Content -LiteralPath $env:SELF -Raw; $marker = '# POWERSHELL_PAYLOAD'; $index = $raw.IndexOf($marker); if ($index -lt 0) { throw 'PowerShell payload marker not found.' }; $payload = $raw.Substring($index + $marker.Length); $tempScript = [System.IO.Path]::Combine($env:TEMP, ('DentalSystem-uninstall-' + [System.Guid]::NewGuid().ToString('N') + '.ps1')); Set-Content -LiteralPath $tempScript -Value $payload -Encoding UTF8; try { & $tempScript @args; exit $LASTEXITCODE } finally { Remove-Item -LiteralPath $tempScript -Force -ErrorAction SilentlyContinue }" %*
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$raw = Get-Content -LiteralPath $env:SELF -Raw; $marker = '# POWERSHELL_PAYLOAD'; $index = $raw.IndexOf($marker); if ($index -lt 0) { throw 'PowerShell payload marker not found.' }; $payload = $raw.Substring($index + $marker.Length); $tempScript = [System.IO.Path]::Combine($env:TEMP, ('DentalSystem-uninstall-' + [System.Guid]::NewGuid().ToString('N') + '.ps1')); Set-Content -LiteralPath $tempScript -Value $payload -Encoding UTF8; try { if ($env:DATA_OPTION -eq '-DeleteUserData') { & $tempScript -DeleteUserData @args } else { & $tempScript @args }; exit $LASTEXITCODE } finally { Remove-Item -LiteralPath $tempScript -Force -ErrorAction SilentlyContinue }" %*
 set "EXIT_CODE=%ERRORLEVEL%"
 echo.
 pause
+:end
 exit /b %EXIT_CODE%
 
 # POWERSHELL_PAYLOAD
