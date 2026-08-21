@@ -3,9 +3,9 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import './index.css';
 import { clinicService } from './services/clinicService';
-import { aiService } from './services/aiService';
-import { externalRagSourceService } from './services/externalRagSourceService';
-import { ragService } from './services/ragService';
+
+// 移除 RAG/AI 功能后，清理旧版本遗留的知识库、接口地址和 API Key 配置。
+['ragKnowledgeEntries', 'ragAiSettings', 'ragExternalSources'].forEach(key => localStorage.removeItem(key));
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
@@ -20,12 +20,7 @@ root.render(
   </div>
 );
 
-Promise.all([
-  clinicService.initialize(),
-  ragService.initialize(),
-  aiService.initialize(),
-  externalRagSourceService.initialize()
-]).finally(() => {
+clinicService.initialize().finally(() => {
   root.render(
     <React.StrictMode>
       <App />

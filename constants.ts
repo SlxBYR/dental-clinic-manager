@@ -41,12 +41,6 @@ export const STORAGE_KEY = 'dental_clinic_data_v2';
 export const BACKUP_SETTINGS_KEY = 'dental_clinic_backup_settings_v1';
 export const CLOUD_SYNC_SETTINGS_KEY = 'dental_clinic_cloud_sync_settings_v1';
 export const RELEASE_SETTINGS_KEY = 'dental_clinic_release_settings_v1';
-export const IMPORT_SNAPSHOT_STORE_KEY = 'dental_clinic_import_snapshot_v1';
-export const IMPORT_SNAPSHOT_BACKUP_STORE_KEY = 'dental_clinic_import_snapshot_backup_v1';
-export const IMPORT_SNAPSHOT_PRE_RESTORE_STORE_KEY = 'dental_clinic_import_snapshot_pre_restore_v1';
-export const CLOUD_SYNC_SNAPSHOT_STORE_KEY = 'dental_clinic_cloud_sync_snapshot_v1';
-export const CLOUD_SYNC_SNAPSHOT_BACKUP_STORE_KEY = 'dental_clinic_cloud_sync_snapshot_backup_v1';
-export const CLOUD_SYNC_SNAPSHOT_PRE_RESTORE_STORE_KEY = 'dental_clinic_cloud_sync_snapshot_pre_restore_v1';
 export const DEFAULT_RELEASE_API_URL = 'https://api.github.com/repos/SlxBYR/dental-clinic-manager/releases/latest';
 // DATA_VERSION 只在 ClinicData 结构变化并需要迁移时递增。
 export const DATA_VERSION = 7;

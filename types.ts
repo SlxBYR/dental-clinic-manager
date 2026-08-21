@@ -163,8 +163,6 @@ export interface CloudSyncSettings {
 export interface CloudSyncResult {
   success: boolean;
   message: string;
-  importContent?: string;
-  preview?: ImportPreview;
 }
 
 export interface ReleaseSettings {
@@ -184,39 +182,23 @@ export interface ReleaseCheckResult {
 }
 
 export interface ImportPreviewMetric {
-  key: string;
   label: string;
   current: number;
   incoming: number;
   added: number;
-  updated: number;
+  overwritten: number;
   removed: number;
-  conflicts: number;
-}
-
-export type ImportConflictResolution = 'local' | 'incoming';
-
-export interface ImportConflictPreview {
-  entityType: string;
-  entityId: string;
-  label: string;
-  fields: string[];
-  reason: string;
 }
 
 export interface ImportPreview {
   currentClinicName: string;
   incomingClinicName: string;
   dataVersion?: number;
-  previousSnapshotAt?: string;
-  localFingerprint: string;
-  conflictCount: number;
-  conflicts: ImportConflictPreview[];
   metrics: ImportPreviewMetric[];
   warnings: string[];
   samples: {
     addedPatients: string[];
-    updatedPatients: string[];
+    overwrittenPatients: string[];
     removedPatients: string[];
   };
 }
@@ -233,129 +215,4 @@ export interface BackupPayload {
   clinicName: string;
   version?: number;
   data: ClinicData;
-}
-
-export type RagSourceType = 'patient' | 'manual' | 'file' | 'external';
-
-export interface RagKnowledgeEntry {
-  id: string;
-  type: Exclude<RagSourceType, 'patient'>;
-  title: string;
-  content: string;
-  createdAt: string;
-  updatedAt: string;
-  fileName?: string;
-  externalSourceId?: string;
-  externalSourceName?: string;
-  externalId?: string;
-  metadata?: Record<string, string | number | boolean>;
-  // 外部源删除时保留审计记录，但不再参与检索。
-  isDeleted?: boolean;
-}
-
-export interface RagChunk {
-  id: string;
-  sourceType: RagSourceType;
-  sourceId: string;
-  title: string;
-  content: string;
-  patientId?: string;
-  patientName?: string;
-  createdAt?: string;
-  externalSourceName?: string;
-  externalId?: string;
-}
-
-export interface RagSearchHit extends RagChunk {
-  score: number;
-  highlights: string[];
-}
-
-export interface RagIndexStats {
-  patientCount: number;
-  knowledgeEntryCount: number;
-  chunkCount: number;
-  updatedAt: string;
-}
-
-export type AiProvider = 'openai-compatible';
-export type AiRedactionMode = 'off' | 'basic' | 'strict';
-
-export interface AiSettings {
-  enabled: boolean;
-  provider: AiProvider;
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-  systemPrompt: string;
-  sendPatientInfo: boolean;
-  redactionMode: AiRedactionMode;
-  maxContextChunks: number;
-}
-
-export interface AiAnswerCitation {
-  index: number;
-  chunkId: string;
-  sourceType: RagSourceType;
-  title: string;
-  patientId?: string;
-  patientName?: string;
-  externalSourceName?: string;
-  externalId?: string;
-}
-
-export interface AiAnswerResult {
-  success: boolean;
-  message: string;
-  answer?: string;
-  citations?: AiAnswerCitation[];
-}
-
-export type RagExternalSourceKind = 'http-json';
-
-export interface RagExternalSourceConfig {
-  id: string;
-  name: string;
-  kind: RagExternalSourceKind;
-  endpoint: string;
-  token?: string;
-  enabled: boolean;
-  cursor?: string;
-  lastSyncedAt?: string;
-  lastError?: string;
-}
-
-export interface RagExternalSourceStatus {
-  success: boolean;
-  message: string;
-}
-
-export interface RagExternalDocument {
-  externalId: string;
-  title: string;
-  content: string;
-  updatedAt?: string;
-  deleted?: boolean;
-  patientMatch?: {
-    patientId?: string;
-    name?: string;
-    phone?: string;
-  };
-  metadata?: Record<string, string | number | boolean>;
-}
-
-export interface RagExternalPullResult {
-  success: boolean;
-  message: string;
-  documents: RagExternalDocument[];
-  cursor?: string;
-}
-
-export interface RagExternalSourceAdapter {
-  id: string;
-  name: string;
-  kind: RagExternalSourceKind;
-  testConnection(config: RagExternalSourceConfig): Promise<RagExternalSourceStatus>;
-  pull(config: RagExternalSourceConfig, cursor?: string): Promise<RagExternalPullResult>;
-  mapDocument(raw: unknown): RagExternalDocument;
 }

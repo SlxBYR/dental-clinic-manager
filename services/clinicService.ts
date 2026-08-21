@@ -1,20 +1,5 @@
-import { ClinicData, Patient, GlobalAppointment, TreatmentCategory, TreatmentItem, AppointmentStatus, BackupSettings, BackupPayload, ReleaseSettings, ReleaseCheckResult, CloudSyncSettings, CloudSyncResult, TreatmentRecord, ImportPreview, ImportPreviewResult, PatientListItem, PatientListPage, PatientListQuery, PatientActivityType, PlannedTreatment, ScheduleSource, VisitType, ImportConflictResolution } from '../types';
-import {
-  STORAGE_KEY,
-  BACKUP_SETTINGS_KEY,
-  CLOUD_SYNC_SETTINGS_KEY,
-  RELEASE_SETTINGS_KEY,
-  DEFAULT_CATALOG,
-  DATA_VERSION,
-  APP_VERSION,
-  DEFAULT_RELEASE_API_URL,
-  IMPORT_SNAPSHOT_STORE_KEY,
-  IMPORT_SNAPSHOT_BACKUP_STORE_KEY,
-  IMPORT_SNAPSHOT_PRE_RESTORE_STORE_KEY,
-  CLOUD_SYNC_SNAPSHOT_STORE_KEY,
-  CLOUD_SYNC_SNAPSHOT_BACKUP_STORE_KEY,
-  CLOUD_SYNC_SNAPSHOT_PRE_RESTORE_STORE_KEY
-} from '../constants';
+import { ClinicData, Patient, GlobalAppointment, TreatmentCategory, TreatmentItem, AppointmentStatus, BackupSettings, BackupPayload, ReleaseSettings, ReleaseCheckResult, CloudSyncSettings, CloudSyncResult, TreatmentRecord, ImportPreview, ImportPreviewMetric, ImportPreviewResult, PatientListItem, PatientListPage, PatientListQuery, PatientActivityType, PlannedTreatment, ScheduleSource, VisitType } from '../types';
+import { STORAGE_KEY, BACKUP_SETTINGS_KEY, CLOUD_SYNC_SETTINGS_KEY, RELEASE_SETTINGS_KEY, DEFAULT_CATALOG, DATA_VERSION, APP_VERSION, DEFAULT_RELEASE_API_URL } from '../constants';
 import { createAppointmentId, migrateClinicData, validateClinicData } from './dataMigrations';
 import { ElectronSqliteStore } from './storage/electronSqliteStore';
 import { LocalStorageStore } from './storage/localStorageStore';
@@ -22,7 +7,6 @@ import { CLINIC_DATA_STORE_KEY, KeyValueStore } from './storage/types';
 import { formatLocalDateTime, getLocalDateKeyFromTimestamp } from '../utils/date';
 import { getPatientPinyinTerms } from '../utils/patientSearch';
 import { mergeConsecutiveSameDayNoteChanges } from '../utils/treatmentChangeLogs';
-import { createImportFingerprint, isImportValueEqual, mergeClinicDataForImport } from './importMerge';
 
 const normalizeName = (name: string) => name.trim().replace(/\s+/g, ' ').toLowerCase();
 const normalizePhone = (phone: string) => phone.trim().replace(/\s/g, '');
@@ -222,34 +206,34 @@ const parseAndValidateClinicData = (rawJson: string): ClinicData => {
   return migrated;
 };
 
-type StoredImportSnapshot = {
-  schemaVersion: 1;
-  savedAt: string;
-  data: ClinicData;
-};
+const flattenAppointments = (data: ClinicData) => Object.values(data.appointments).flat();
 
-type IncrementalUpdateSource = 'file' | 'cloud';
-
-const parseStoredImportSnapshot = (rawValue: string): StoredImportSnapshot => {
-  const parsed = JSON.parse(rawValue);
-  if (parsed?.schemaVersion !== 1 || typeof parsed?.savedAt !== 'string' || !parsed?.data) {
-    throw new Error('更新快照格式不正确。');
-  }
-  return {
-    schemaVersion: 1,
-    savedAt: parsed.savedAt,
-    data: parseAndValidateClinicData(JSON.stringify(parsed.data))
-  };
-};
-
-const serializeStoredImportSnapshot = (snapshot: StoredImportSnapshot | null) => (
-  snapshot ? JSON.stringify(snapshot) : ''
+const mergeAppointmentDeletionTombstones = (...sources: Array<Record<string, string> | undefined>) => (
+  sources.reduce<Record<string, string>>((merged, source) => {
+    Object.entries(source || {}).forEach(([id, deletedAt]) => {
+      if (!merged[id] || deletedAt > merged[id]) merged[id] = deletedAt;
+    });
+    return merged;
+  }, {})
 );
 
-const flattenAppointments = (data: ClinicData) => Object.values(data.appointments).flat();
+const applyAppointmentDeletionTombstones = (data: ClinicData) => {
+  const deletedIds = new Set(Object.keys(data.appointmentDeletionTombstones || {}));
+  if (deletedIds.size === 0) return;
+  Object.keys(data.appointments).forEach(dateKey => {
+    data.appointments[dateKey] = data.appointments[dateKey].filter(appointment => !deletedIds.has(appointment.id));
+    if (data.appointments[dateKey].length === 0) delete data.appointments[dateKey];
+  });
+  Object.values(data.patients).forEach(patient => {
+    patient.appointments = patient.appointments.filter(appointment => !deletedIds.has(appointment.id));
+  });
+};
 
 const countTreatments = (data: ClinicData) => Object.values(data.patients)
   .reduce((total, patient) => total + patient.treatments.length, 0);
+
+const countCatalogItems = (data: ClinicData) => data.catalog
+  .reduce((total, category) => total + category.items.length, 0);
 
 const patientLabel = (patient?: Patient) => {
   if (!patient) return '';
@@ -324,6 +308,41 @@ const getPatientVisitMetadata = (patient: Patient, appointments: GlobalAppointme
   };
 };
 
+const createDiffMetric = <T>(
+  label: string,
+  currentItems: T[],
+  incomingItems: T[],
+  getId: (item: T) => string
+): ImportPreviewMetric => {
+  const currentMap = new Map(currentItems.map(item => [getId(item), item]));
+  const incomingMap = new Map(incomingItems.map(item => [getId(item), item]));
+  let added = 0;
+  let overwritten = 0;
+  let removed = 0;
+
+  incomingMap.forEach((incoming, id) => {
+    const current = currentMap.get(id);
+    if (!current) {
+      added += 1;
+      return;
+    }
+    if (JSON.stringify(current) !== JSON.stringify(incoming)) overwritten += 1;
+  });
+
+  currentMap.forEach((_, id) => {
+    if (!incomingMap.has(id)) removed += 1;
+  });
+
+  return {
+    label,
+    current: currentItems.length,
+    incoming: incomingItems.length,
+    added,
+    overwritten,
+    removed
+  };
+};
+
 class ClinicService {
   private data: ClinicData = createEmptyData();
   private store: KeyValueStore = new LocalStorageStore();
@@ -332,8 +351,6 @@ class ClinicService {
   private initialized = false;
   private initPromise: Promise<void> | null = null;
   private saveQueue: Promise<void> = Promise.resolve();
-  private lastImportSnapshot: StoredImportSnapshot | null = null;
-  private lastCloudSyncSnapshot: StoredImportSnapshot | null = null;
   private storageStatus = {
     primary: 'localStorage',
     message: '正在初始化本地存储。'
@@ -342,49 +359,8 @@ class ClinicService {
   // 初始化优先使用 Electron 暴露的 SQLite；失败时保留 localStorage 兜底，保证浏览器预览也能运行。
   initialize(): Promise<void> {
     if (this.initPromise) return this.initPromise;
-    this.initPromise = this.loadInitialData().then(() => this.loadUpdateSnapshots());
+    this.initPromise = this.loadInitialData();
     return this.initPromise;
-  }
-
-  private async loadStoredSnapshot(storeKey: string, label: string): Promise<StoredImportSnapshot | null> {
-    try {
-      let stored = await this.store.getItem(storeKey);
-      if (!stored && this.store.name !== this.localStore.name) {
-        const fallbackSnapshot = await this.localStore.getItem(storeKey);
-        if (fallbackSnapshot) {
-          await this.store.setItem(storeKey, fallbackSnapshot);
-          localStorage.removeItem(storeKey);
-          stored = fallbackSnapshot;
-        }
-      }
-      return stored ? parseStoredImportSnapshot(stored) : null;
-    } catch (error) {
-      console.error(`${label}快照无法读取，本次将按首次增量更新处理。`, error);
-      return null;
-    }
-  }
-
-  private async loadUpdateSnapshots() {
-    const [fileSnapshot, cloudSnapshot] = await Promise.all([
-      this.loadStoredSnapshot(IMPORT_SNAPSHOT_STORE_KEY, '上一份导入'),
-      this.loadStoredSnapshot(CLOUD_SYNC_SNAPSHOT_STORE_KEY, '上一份云端同步')
-    ]);
-    this.lastImportSnapshot = fileSnapshot;
-    this.lastCloudSyncSnapshot = cloudSnapshot;
-  }
-
-  private getUpdateSnapshot(source: IncrementalUpdateSource) {
-    return source === 'cloud' ? this.lastCloudSyncSnapshot : this.lastImportSnapshot;
-  }
-
-  private getUpdateSnapshotStoreKey(source: IncrementalUpdateSource) {
-    return source === 'cloud' ? CLOUD_SYNC_SNAPSHOT_STORE_KEY : IMPORT_SNAPSHOT_STORE_KEY;
-  }
-
-  private async persistUpdateSnapshot(source: IncrementalUpdateSource, snapshot: StoredImportSnapshot | null) {
-    await this.store.setItem(this.getUpdateSnapshotStoreKey(source), serializeStoredImportSnapshot(snapshot));
-    if (source === 'cloud') this.lastCloudSyncSnapshot = snapshot;
-    else this.lastImportSnapshot = snapshot;
   }
 
   private async loadInitialData() {
@@ -604,7 +580,7 @@ class ClinicService {
     }));
   }
 
-  // 云端同步通过 Bearer Key 鉴权；请求体只发送同步动作和加密后的业务载荷。
+  // 云端同步只约定前端请求格式；key 到具体仓库/对象路径的映射由服务器实现。
   private validateCloudSyncSettings(settings: CloudSyncSettings): { endpoint?: URL; key?: string; error?: string } {
     const rawEndpoint = settings.endpoint.trim();
     const key = settings.key.trim();
@@ -637,7 +613,8 @@ class ClinicService {
         },
         body: JSON.stringify({
           app: 'DentalClinicManager',
-          action: 'pull'
+          action: 'pull',
+          key: validation.key
         }),
         signal: controller.signal
       });
@@ -656,18 +633,20 @@ class ClinicService {
         return { success: false, message: '云端数据格式不正确。' };
       }
 
-      // 只下载并生成预览；真正写入必须复用文件导入的三方增量合并与冲突确认。
-      const importContent = JSON.stringify(remoteData);
-      const previewResult = this.createImportPreview(importContent, 'local', 'cloud');
-      if (!previewResult.success || !previewResult.preview) {
-        return { success: false, message: previewResult.message };
+      // 云端拉取是覆盖式写入，所以必须先迁移并校验完整数据结构。
+      const migrated = migrateClinicData(remoteData);
+      migrated.appointmentDeletionTombstones = mergeAppointmentDeletionTombstones(
+        migrated.appointmentDeletionTombstones,
+        this.data.appointmentDeletionTombstones
+      );
+      applyAppointmentDeletionTombstones(migrated);
+      const dataValidation = validateClinicData(migrated);
+      if (dataValidation.valid === false) {
+        return { success: false, message: `云端数据校验失败：${dataValidation.message}` };
       }
-      return {
-        success: true,
-        message: '云端数据已下载，请在增量同步预览中确认冲突处理方式。',
-        importContent,
-        preview: previewResult.preview
-      };
+      this.data = migrated;
+      await this.saveDataAsync();
+      return { success: true, message: '已从云端同步数据。' };
     } catch (e) {
       const message = e instanceof DOMException && e.name === 'AbortError'
         ? '云端同步超时，请稍后再试。'
@@ -698,6 +677,7 @@ class ClinicService {
         body: JSON.stringify({
           app: 'DentalClinicManager',
           action: 'push',
+          key: validation.key,
           payload: encryptedPayload
         }),
         signal: controller.signal
@@ -707,22 +687,7 @@ class ClinicService {
         return { success: false, message: `服务器返回 ${response.status} ${response.statusText || ''}`.trim() };
       }
 
-      const nextSnapshot: StoredImportSnapshot = {
-        schemaVersion: 1,
-        savedAt: new Date().toISOString(),
-        // 上传成功后，本机与云端共同基线就是本次上传的完整本机数据。
-        data: parseAndValidateClinicData(JSON.stringify(this.data))
-      };
-      try {
-        await this.persistUpdateSnapshot('cloud', nextSnapshot);
-      } catch (snapshotError) {
-        return {
-          success: false,
-          message: `云端数据已经上传，但本机同步快照保存失败；请再次上传以重建快照：${snapshotError instanceof Error ? snapshotError.message : String(snapshotError)}`
-        };
-      }
-
-      return { success: true, message: '本机数据已加密上传到云端，并保存为下一次增量同步基线。' };
+      return { success: true, message: '本机数据已加密上传到云端。' };
     } catch (e) {
       const message = e instanceof DOMException && e.name === 'AbortError'
         ? '云端上传超时，请稍后再试。'
@@ -894,145 +859,56 @@ class ClinicService {
     const backup = localStorage.getItem(`${STORAGE_KEY}_pre_import_backup`);
     if (!backup) return { success: false, message: '暂无导入前备份可恢复。' };
 
-    const previousData = this.data;
-    const previousImportSnapshot = this.lastImportSnapshot;
-    const previousCloudSnapshot = this.lastCloudSyncSnapshot;
     try {
       const migrated = parseAndValidateClinicData(backup);
-      const [importSnapshotBackupValue, cloudSnapshotBackupValue] = await Promise.all([
-        this.store.getItem(IMPORT_SNAPSHOT_BACKUP_STORE_KEY),
-        this.store.getItem(CLOUD_SYNC_SNAPSHOT_BACKUP_STORE_KEY)
-      ]);
-      const restoredImportSnapshot = importSnapshotBackupValue ? parseStoredImportSnapshot(importSnapshotBackupValue) : null;
-      const restoredCloudSnapshot = cloudSnapshotBackupValue ? parseStoredImportSnapshot(cloudSnapshotBackupValue) : null;
       localStorage.setItem(`${STORAGE_KEY}_pre_restore_backup`, this.exportData());
-      await Promise.all([
-        this.store.setItem(IMPORT_SNAPSHOT_PRE_RESTORE_STORE_KEY, serializeStoredImportSnapshot(previousImportSnapshot)),
-        this.store.setItem(CLOUD_SYNC_SNAPSHOT_PRE_RESTORE_STORE_KEY, serializeStoredImportSnapshot(previousCloudSnapshot))
-      ]);
       this.data = migrated;
       await this.saveDataAsync();
-      await this.persistUpdateSnapshot('file', restoredImportSnapshot);
-      await this.persistUpdateSnapshot('cloud', restoredCloudSnapshot);
-      return { success: true, message: '已恢复增量更新前数据，以及文件导入和云端同步快照。恢复前数据已保存在本机恢复前备份中。' };
+      return { success: true, message: '已恢复导入前备份。恢复前数据已保存在本机恢复前备份中。' };
     } catch (error) {
-      this.data = previousData;
-      try {
-        await this.saveDataAsync();
-        await this.persistUpdateSnapshot('file', previousImportSnapshot);
-        await this.persistUpdateSnapshot('cloud', previousCloudSnapshot);
-      } catch (rollbackError) {
-        console.error('恢复失败后的数据回滚未完整保存。', rollbackError);
-      }
       return { success: false, message: error instanceof Error ? `恢复失败：${error.message}` : '恢复失败，备份数据无法解析。' };
     }
   }
 
-  async importData(
-    jsonString: string,
-    conflictResolution: ImportConflictResolution = 'local',
-    expectedLocalFingerprint?: string,
-    source: IncrementalUpdateSource = 'file'
-  ): Promise<{ success: boolean; message: string }> {
-    const previousData = this.data;
-    const previousImportSnapshot = this.lastImportSnapshot;
-    const previousCloudSnapshot = this.lastCloudSyncSnapshot;
-    const previousSourceSnapshot = this.getUpdateSnapshot(source);
-    let didMutateData = false;
+  async importData(jsonString: string): Promise<{ success: boolean; message: string }> {
     try {
-      if (expectedLocalFingerprint && createImportFingerprint(this.data) !== expectedLocalFingerprint) {
-        return { success: false, message: '预览后本机数据发生了变化，请重新获取数据并生成最新预览。' };
-      }
-
-      const incoming = parseAndValidateClinicData(jsonString);
-      const mergeResult = mergeClinicDataForImport(
-        previousSourceSnapshot?.data || null,
-        this.data,
-        incoming,
-        conflictResolution
-      );
-      const merged = migrateClinicData(mergeResult.data);
-      const validation = validateClinicData(merged);
-      if (validation.valid === false) throw new Error(`增量合并结果校验失败：${validation.message}`);
-
+      const migrated = parseAndValidateClinicData(jsonString);
       localStorage.setItem(`${STORAGE_KEY}_pre_import_backup`, this.exportData());
-      await Promise.all([
-        this.store.setItem(IMPORT_SNAPSHOT_BACKUP_STORE_KEY, serializeStoredImportSnapshot(previousImportSnapshot)),
-        this.store.setItem(CLOUD_SYNC_SNAPSHOT_BACKUP_STORE_KEY, serializeStoredImportSnapshot(previousCloudSnapshot))
-      ]);
-
-      this.data = merged;
-      didMutateData = true;
+      this.data = migrated;
       await this.saveDataAsync();
-      const nextSnapshot: StoredImportSnapshot = {
-        schemaVersion: 1,
-        savedAt: new Date().toISOString(),
-        // 三方合并的共同基线必须是“上一次收到的导入文件”，不能是合并结果；
-        // 否则本机独有记录会在下次导入时被误认为来自导入源。
-        data: incoming
-      };
-      try {
-        await this.persistUpdateSnapshot(source, nextSnapshot);
-      } catch (snapshotError) {
-        this.data = previousData;
-        await this.saveDataAsync();
-        await this.persistUpdateSnapshot('file', previousImportSnapshot);
-        await this.persistUpdateSnapshot('cloud', previousCloudSnapshot);
-        throw new Error(`更新快照保存失败，已恢复导入前数据：${snapshotError instanceof Error ? snapshotError.message : String(snapshotError)}`);
-      }
-
-      const totals = mergeResult.metrics.reduce((summary, metric) => ({
-        added: summary.added + metric.added,
-        updated: summary.updated + metric.updated,
-        removed: summary.removed + metric.removed
-      }), { added: 0, updated: 0, removed: 0 });
-      const conflictMessage = mergeResult.conflicts.length > 0
-        ? `，${mergeResult.conflicts.length} 项冲突已${conflictResolution === 'incoming' ? `采用${source === 'cloud' ? '云端' : '导入文件'}内容` : '保留本机内容'}`
-        : '';
-      const actionLabel = source === 'cloud' ? '云端增量同步' : '增量导入';
-      return {
-        success: true,
-        message: `${actionLabel}成功：新增 ${totals.added} 项、更新 ${totals.updated} 项、删除 ${totals.removed} 项${conflictMessage}。更新前数据及上一份快照均已备份。`
-      };
+      return { success: true, message: '导入成功。导入前数据已保存在本机预导入备份中。' };
     } catch (e) {
       console.error("Import failed", e);
-      if (didMutateData && this.data !== previousData) {
-        this.data = previousData;
-        try {
-          await this.saveDataAsync();
-          await this.persistUpdateSnapshot('file', previousImportSnapshot);
-          await this.persistUpdateSnapshot('cloud', previousCloudSnapshot);
-        } catch (rollbackError) {
-          console.error('增量更新失败后的回滚未完整保存。', rollbackError);
-        }
-      }
-      const actionLabel = source === 'cloud' ? '云端增量同步' : '增量导入';
-      return { success: false, message: e instanceof Error ? `${actionLabel}失败：${e.message}` : `${actionLabel}失败，数据无法解析。` };
+      return { success: false, message: e instanceof Error ? `导入失败：${e.message}` : '导入失败，无法解析 JSON 文件。' };
     }
   }
 
-  createImportPreview(
-    jsonString: string,
-    conflictResolution: ImportConflictResolution = 'local',
-    source: IncrementalUpdateSource = 'file'
-  ): ImportPreviewResult {
+  createImportPreview(jsonString: string): ImportPreviewResult {
     try {
       const incoming = parseAndValidateClinicData(jsonString);
-      const sourceSnapshot = this.getUpdateSnapshot(source);
       const currentPatients = Object.values(this.data.patients);
       const incomingPatients = Object.values(incoming.patients);
+      const currentAppointments = flattenAppointments(this.data);
       const incomingAppointments = flattenAppointments(incoming);
-      const mergeResult = mergeClinicDataForImport(
-        sourceSnapshot?.data || null,
-        this.data,
-        incoming,
-        conflictResolution
-      );
+      const currentTreatments = currentPatients.flatMap(patient => (
+        patient.treatments.map(treatment => ({ patientId: patient.id, treatment }))
+      ));
+      const incomingTreatments = incomingPatients.flatMap(patient => (
+        patient.treatments.map(treatment => ({ patientId: patient.id, treatment }))
+      ));
+      const currentCatalogCategories = this.data.catalog;
+      const incomingCatalogCategories = incoming.catalog;
+      const currentCatalogItems = this.data.catalog.flatMap(category => (
+        category.items.map(item => ({ categoryId: category.id, item }))
+      ));
+      const incomingCatalogItems = incoming.catalog.flatMap(category => (
+        category.items.map(item => ({ categoryId: category.id, item }))
+      ));
 
       const currentPatientMap = new Map(currentPatients.map(patient => [patient.id, patient]));
       const incomingPatientMap = new Map(incomingPatients.map(patient => [patient.id, patient]));
       const addedPatients: string[] = [];
-      const updatedPatients: string[] = [];
+      const overwrittenPatients: string[] = [];
       const removedPatients: string[] = [];
 
       incomingPatientMap.forEach((patient, id) => {
@@ -1041,50 +917,48 @@ class ClinicService {
           addedPatients.push(patientLabel(patient));
           return;
         }
-        if (!isImportValueEqual(current, patient)) updatedPatients.push(patientLabel(patient));
+        if (JSON.stringify(current) !== JSON.stringify(patient)) overwrittenPatients.push(patientLabel(patient));
       });
-
-      const explicitlyDeletedAppointmentIds = new Set(Object.keys(incoming.appointmentDeletionTombstones || {}));
-      flattenAppointments(this.data).forEach(appointment => {
-        if (explicitlyDeletedAppointmentIds.has(appointment.id)) {
-          removedPatients.push(`${appointment.name} · ${appointment.date} ${appointment.time}`);
-        }
+      currentPatientMap.forEach((patient, id) => {
+        if (!incomingPatientMap.has(id)) removedPatients.push(patientLabel(patient));
       });
 
       const warnings: string[] = [
-        sourceSnapshot
-          ? `冲突判断基于 ${formatLocalDateTime(new Date(sourceSnapshot.savedAt))} 保存的上一份${source === 'cloud' ? '云端同步' : '文件导入'}快照。`
-          : `尚无上一份${source === 'cloud' ? '云端同步' : '文件导入'}快照：本次将安全并集数据，相同 ID 的不同内容会列为冲突，来源中缺失的普通记录不会删除本机数据。`,
-        `本机独有记录会保留；只有${source === 'cloud' ? '云端数据' : '导入文件'}中带有明确删除标记的预约才会执行删除。`,
-        '系统会先保存更新前数据及两类旧快照，可在设置页恢复最近一次增量更新前状态。'
+        '确认导入后，当前本机主数据会被导入文件整体覆盖。',
+        '系统会先保存一份导入前备份，可在设置页恢复最近一次导入前状态。'
       ];
       if ((this.data.clinicName || 'DentalClinic') !== (incoming.clinicName || 'DentalClinic')) {
-        warnings.push(`诊所名称不同；若它构成冲突，将按所选冲突处理方式决定。`);
+        warnings.push(`诊所名称将从“${this.data.clinicName || 'DentalClinic'}”变为“${incoming.clinicName || 'DentalClinic'}”。`);
       }
       if ((incoming.dataVersion || incoming.version || 0) < DATA_VERSION) {
-        warnings.push(`${source === 'cloud' ? '云端' : '导入文件'}数据版本较旧，已预览迁移到当前数据版本 ${DATA_VERSION} 后的结果。`);
+        warnings.push(`导入文件数据版本较旧，已预览迁移到当前数据版本 ${DATA_VERSION} 后的结果。`);
+      }
+      if (removedPatients.length > 0) {
+        warnings.push(`导入文件中缺少 ${removedPatients.length} 位当前患者，确认后这些患者会从本机主数据中移除。`);
       }
 
       const preview: ImportPreview = {
         currentClinicName: this.data.clinicName || 'DentalClinic',
         incomingClinicName: incoming.clinicName || 'DentalClinic',
         dataVersion: incoming.dataVersion || incoming.version,
-        previousSnapshotAt: sourceSnapshot?.savedAt,
-        localFingerprint: createImportFingerprint(this.data),
-        conflictCount: mergeResult.conflicts.length,
-        conflicts: mergeResult.conflicts,
-        metrics: mergeResult.metrics,
+        metrics: [
+          createDiffMetric('患者档案', currentPatients, incomingPatients, patient => patient.id),
+          createDiffMetric('预约记录', currentAppointments, incomingAppointments, appointment => appointment.id),
+          createDiffMetric('处置记录', currentTreatments, incomingTreatments, item => `${item.patientId}:${item.treatment.id}`),
+          createDiffMetric('处置分类', currentCatalogCategories, incomingCatalogCategories, category => category.id),
+          createDiffMetric('目录项目', currentCatalogItems, incomingCatalogItems, item => `${item.categoryId}:${item.item.id}`)
+        ],
         warnings,
         samples: {
           addedPatients: addedPatients.slice(0, 5),
-          updatedPatients: updatedPatients.slice(0, 5),
+          overwrittenPatients: overwrittenPatients.slice(0, 5),
           removedPatients: removedPatients.slice(0, 5)
         }
       };
 
       return {
         success: true,
-        message: `${source === 'cloud' ? '云端增量同步' : '增量导入'}预览已生成：来源包含 ${incomingPatients.length} 位患者、${incomingAppointments.length} 条预约、${countTreatments(incoming)} 条处置记录；发现 ${mergeResult.conflicts.length} 项冲突。`,
+        message: `导入预览已生成：${incomingPatients.length} 位患者、${incomingAppointments.length} 条预约、${countTreatments(incoming)} 条处置记录、${countCatalogItems(incoming)} 个目录项目。`,
         preview
       };
     } catch (e) {

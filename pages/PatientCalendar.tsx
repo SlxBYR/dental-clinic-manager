@@ -303,7 +303,7 @@ export const PatientCalendar = ({
   return (
     <div className="flex h-full min-h-0 w-full flex-col p-6">
       <div className="mb-5">
-        <h2 className="text-3xl font-bold text-slate-900">患者更新日历</h2>
+        <h2 className="text-3xl font-bold text-slate-900">患者日历</h2>
       </div>
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-5 xl:grid-cols-[max-content_minmax(320px,1fr)]">
@@ -373,7 +373,7 @@ export const PatientCalendar = ({
                       {summaries.length > 0 && (
                         <span
                           className="absolute right-0 top-0 z-20 flex h-4 min-w-4 items-center justify-center px-0.5 text-[9px] font-bold leading-none"
-                          style={{ backgroundColor: '#FF4747', color: '#4747FF' }}
+                          style={{ backgroundColor: '#6395F2', color: '#030329' }}      //这是修改日历格右上角数字颜色的参数
                         >
                           {summaries.length}
                         </span>
@@ -397,7 +397,7 @@ export const PatientCalendar = ({
                 value={patientSearch}
                 onChange={event => setPatientSearch(event.target.value)}
                 placeholder="搜索姓名、拼音首字母或电话..."
-                aria-label="搜索日历患者"
+                aria-label="搜索患者"
                 className="w-full rounded-lg border border-slate-200 py-3 pl-10 pr-4 text-lg outline-none focus:border-transparent focus:ring-2 focus:ring-teal-500"
               />
             </div>

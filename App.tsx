@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { BarChart3, BellRing, Calendar, CalendarDays, Database, LayoutDashboard, PanelLeftClose, PanelLeftOpen, Settings, Users } from 'lucide-react';
+import { BarChart3, BellRing, Calendar, CalendarDays, LayoutDashboard, PanelLeftClose, PanelLeftOpen, Settings, Users } from 'lucide-react';
 import { APP_VERSION } from './constants';
 import { SidebarItem } from './components/SidebarItem';
 import { SettingsModal } from './modals/SettingsModal';
@@ -7,7 +7,6 @@ import { Dashboard } from './pages/Dashboard';
 import { PatientCalendar } from './pages/PatientCalendar';
 import { PatientDetail } from './pages/PatientDetail';
 import { PatientList } from './pages/PatientList';
-import { RagAssistant } from './pages/RagAssistant';
 import { Reports } from './pages/Reports';
 import { ScheduleManager } from './pages/ScheduleManager';
 import { clinicService } from './services/clinicService';
@@ -100,8 +99,6 @@ export default function App() {
         return <ScheduleManager patients={patients} onRefresh={refreshData} onPatientClick={handlePatientClick} />;
       case 'reports':
         return <Reports patients={patients} onPatientClick={handlePatientClick} />;
-      case 'rag':
-        return <RagAssistant patients={patients} onPatientClick={handlePatientClick} />;
       default:
         return <Dashboard onViewChange={setCurrentView} patients={patients} onPatientClick={handlePatientClick} onRefresh={refreshData} />;
     }
@@ -165,13 +162,6 @@ export default function App() {
             collapsed={sidebarCollapsed}
             active={currentView === 'reports'}
             onClick={() => { setSelectedPatientId(null); setCurrentView('reports'); }}
-          />
-          <SidebarItem
-            icon={<Database size={20} />}
-            label="RAG 知识库"
-            collapsed={sidebarCollapsed}
-            active={currentView === 'rag'}
-            onClick={() => { setSelectedPatientId(null); setCurrentView('rag'); }}
           />
         </nav>
 
